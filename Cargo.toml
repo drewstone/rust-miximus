@@ -1,0 +1,8 @@
+[package]
+name = "rust-miximus"
+version = "0.1.0"
+authors = ["drewstone <drewstone329@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+bellman = "0.1.0"
