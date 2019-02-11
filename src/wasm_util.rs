@@ -59,13 +59,17 @@ pub fn generate(seed_slice: &[u32]) -> Result<JsValue, JsValue> {
         seed.copy_from_slice(seed_slice);
         let rng = &mut XorShiftRng::from_seed(seed);
 
-        let j_params = &JubjubBn256::new();
+        let j_params = &AltJubjubBn256::new();
         let params = generate_random_parameters::<Bn256, _, _>(
-            DiscreteLogCircuit {
+            MerkleTreeCircuit {
                 params: j_params,
-                x: None
+                nullifier: None,
+                xr: None,
+                leaf: None,
+                root: None,
+                proof: vec![],
             },
-            rng
+            rng,
         )?;
 
         let mut v = vec![];
@@ -80,7 +84,7 @@ pub fn generate(seed_slice: &[u32]) -> Result<JsValue, JsValue> {
 }
 
 #[wasm_bindgen(catch)]
-pub fn prove(seed_slice: &[u32], params: &str, x_hex: &str) -> Result<JsValue, JsValue> {
+pub fn prove(seed_slice: &[u32], params: &str, nullifier_hex: &str, xr_hex: &str, leaf_hex: &str, root_hex: &str, proof_hex: Vec<&str>) -> Result<JsValue, JsValue> {
     let res = || -> Result<JsValue, Box<Error>> {
         if params.len() == 0 {
             return Err("Params are empty. Did you generate or load params?".into())
@@ -90,26 +94,66 @@ pub fn prove(seed_slice: &[u32], params: &str, x_hex: &str) -> Result<JsValue, J
         let mut seed : [u32; 4] = [0; 4];
         seed.copy_from_slice(seed_slice);
         let rng = &mut XorShiftRng::from_seed(seed);
-        let params = &JubjubBn256::new();
+        let params = &AltJubjubBn256::new();
 
         let g = params.generator(FixedGenerators::ProofGenerationKey);
         let s = &format!("{}", Fs::char())[2..];
         let s_big = BigInt::from_str_radix(s, 16)?;
+        // X
         let x_big = BigInt::from_str_radix(x_hex, 16)?;
         if x_big >= s_big {
             return Err("x should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
         }
         let x_raw = &x_big.to_str_radix(10);
-        let x = Fr::from_str(x_raw).ok_or("couldn't parse Fr")?;
-
         let xs = Fs::from_str(x_raw).ok_or("couldn't parse Fr")?;
+        let x = Fr::from_str(x_raw).ok_or("couldn't parse Fr")?;
+        // Nullifier
+        let nullifier_big = BigInt::from_str_radix(nullifier_hex, 16)?;
+        if nullifier_big >= s_big {
+            return Err("x should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
+        }
+        let nullifier_raw = &nullifier_big.to_str_radix(10);
+        let nullifier = Fr::from_str(nullifier_raw).ok_or("couldn't parse Fr")?;
+        let nullifier_s = Fr::from_str(nullifier_raw).ok_or("couldn't parse Fr")?;
+        // xr - secret data
+        let xr_big = BigInt::from_str_radix(xr_hex, 16)?;
+        if xr_big >= s_big {
+            return Err("x should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
+        }
+        let xr_raw = &xr_big.to_str_radix(10);
+        let xr = Fr::from_str(xr_raw).ok_or("couldn't parse Fr")?;
+        let xr_s = Fr::from_str(xr_raw).ok_or("couldn't parse Fr")?;
+        // leaf hash
+        let leaf_big = BigInt::from_str_radix(leaf_hex, 16)?;
+        if leaf_big >= s_big {
+            return Err("x should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
+        }
+        let leaf_raw = &leaf_big.to_str_radix(10);
+        let leaf = Fr::from_str(leaf_raw).ok_or("couldn't parse Fr")?;
+        let leaf_s = Fr::from_str(leaf_raw).ok_or("couldn't parse Fr")?;
 
-        let h = g.mul(xs, params);
+        // leaf hash
+        let proof_big = proof_hex.iter().map(|s, p_hex| BigInt::from_str_radix(p_hex, 16)?);
+        for (s, p) in proof_big {
+            if p >= s_big {
+                return Err("p should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
+            }
+        }
+            
+        let proof_raw = proof_hex.iter().map(|s, p| &proof_big.to_str_radix(10));
+        let proof = proof_raw.iter().map(|s, p| Some(Fr::from_str(p).ok_or("couldn't parse Fr")?));
+        let proof_s = proof_raw.iter().map(|s, p| Some(Fr::from_str(p).ok_or("couldn't parse Fr")?));
+
+        let leaf_hash = g.mul(xs, params);
 
         let proof = create_random_proof(
-            DiscreteLogCircuit {
-                params: params,
-                x: Some(x),
+            MerkleTreeCircuit {
+                params: j_params,
+                nullifier: Some(nullifier),
+                xr: Some(xr),
+                leaf: Some(leaf),
+                root: Some(root),
+                proof: proof,
             },
             &de_params,
             rng
