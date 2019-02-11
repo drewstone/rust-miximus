@@ -56,11 +56,13 @@ impl<'a, E: JubjubEngine> Circuit<E> for MerkleTreeCircuit<'a, E> where E: sapli
             let root_value = self.root.unwrap();
             Ok(root_value)
         })?;
+        root.inputize(cs.namespace(|| "public input root"))?;
 
         let nullifier = AllocatedNum::alloc(cs.namespace(|| "nullifier"), || {
             let nullifier_value = self.nullifier.unwrap();
             Ok(nullifier_value)
         })?;
+        nullifier.inputize(cs.namespace(|| "public input nullifier"))?;
 
         let xr = AllocatedNum::alloc(cs.namespace(|| "xr"), || {
             let xr_value = self.xr.unwrap();
@@ -71,6 +73,7 @@ impl<'a, E: JubjubEngine> Circuit<E> for MerkleTreeCircuit<'a, E> where E: sapli
             let leaf_value = self.leaf.unwrap();
             Ok(leaf_value)
         })?;
+        leaf.inputize(cs.namespace(|| "public input leaf"))?;
         
         let nullifier_bits = nullifier.into_bits_le_strict(cs.namespace(|| "nullifier bits")).unwrap();
         let xr_bits = xr.into_bits_le_strict(cs.namespace(|| "secret bits")).unwrap();
