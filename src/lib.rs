@@ -10,13 +10,12 @@ extern crate rand;
 extern crate time;
 
 use time::PreciseTime;
-use std::error::Error;
 use bellman::{
     Circuit,
     SynthesisError,
     ConstraintSystem,
     groth16::{
-    	Proof, Parameters, verify_proof, create_random_proof, prepare_verifying_key,
+    	// Proof, Parameters, verify_proof, create_random_proof, prepare_verifying_key,
     	generate_random_parameters
     }
 };
@@ -197,7 +196,7 @@ fn apply_pedersen<E: JubjubEngine, CS: ConstraintSystem<E>>(
 #[test]
 fn test_merkle() {
     let mut seed : [u32; 4] = [0; 4];
-    seed.copy_from_slice(&[1u32]);
+    seed.copy_from_slice(&[1u32, 1u32, 1u32, 1u32]);
     let rng = &mut XorShiftRng::from_seed(seed);
     println!("generating setup...");
     let start = PreciseTime::now();
