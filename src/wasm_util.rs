@@ -14,8 +14,7 @@ use bellman::{
     SynthesisError,
     ConstraintSystem,
     groth16::{
-        // Proof, Parameters, verify_proof, create_random_proof, prepare_verifying_key,
-        generate_random_parameters
+        Proof, Parameters, verify_proof, create_random_proof, prepare_verifying_key, generate_random_parameters
     }
 };
 
@@ -123,7 +122,7 @@ pub fn prove(seed_slice: &[u32], params: &str, nullifier_hex: &str, xr_hex: &str
         let xr_raw = &xr_big.to_str_radix(10);
         let xr = Fr::from_str(xr_raw).ok_or("couldn't parse Fr")?;
         let xr_s = Fr::from_str(xr_raw).ok_or("couldn't parse Fr")?;
-        // leaf hash
+        // Leaf hash
         let leaf_big = BigInt::from_str_radix(leaf_hex, 16)?;
         if leaf_big >= s_big {
             return Err("x should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
@@ -131,6 +130,14 @@ pub fn prove(seed_slice: &[u32], params: &str, nullifier_hex: &str, xr_hex: &str
         let leaf_raw = &leaf_big.to_str_radix(10);
         let leaf = Fr::from_str(leaf_raw).ok_or("couldn't parse Fr")?;
         let leaf_s = Fr::from_str(leaf_raw).ok_or("couldn't parse Fr")?;
+        // Root hash
+        let root_big = BigInt::from_str_radix(root_hex, 16)?;
+        if root_big >= s_big {
+            return Err("x should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
+        }
+        let root_raw = &root_big.to_str_radix(10);
+        let root = Fr::from_str(root_raw).ok_or("couldn't parse Fr")?;
+        let root_s = Fr::from_str(root_raw).ok_or("couldn't parse Fr")?;
 
         // leaf hash
         let proof_big = proof_hex.iter().map(|s, p_hex| BigInt::from_str_radix(p_hex, 16)?);
@@ -143,8 +150,6 @@ pub fn prove(seed_slice: &[u32], params: &str, nullifier_hex: &str, xr_hex: &str
         let proof_raw = proof_hex.iter().map(|s, p| &proof_big.to_str_radix(10));
         let proof = proof_raw.iter().map(|s, p| Some(Fr::from_str(p).ok_or("couldn't parse Fr")?));
         let proof_s = proof_raw.iter().map(|s, p| Some(Fr::from_str(p).ok_or("couldn't parse Fr")?));
-
-        let leaf_hash = g.mul(xs, params);
 
         let proof = create_random_proof(
             MerkleTreeCircuit {
@@ -167,7 +172,7 @@ pub fn prove(seed_slice: &[u32], params: &str, nullifier_hex: &str, xr_hex: &str
 
         Ok(JsValue::from_serde(&KGProof {
             proof: hex::encode(&v[..]),
-            h: hex::encode(&v2[..])
+            // h: hex::encode(&v2[..])
         })?)
     }();
 
@@ -175,19 +180,47 @@ pub fn prove(seed_slice: &[u32], params: &str, nullifier_hex: &str, xr_hex: &str
 }
 
 #[wasm_bindgen(catch)]
-pub fn verify(params: &str, proof: &str, h: &str) -> Result<JsValue, JsValue> {
+pub fn verify(params: &str, proof: &str, nullifier_hex: &str, leaf_hex: &str, root_hex: &str) -> Result<JsValue, JsValue> {
     let res = || -> Result<JsValue, Box<Error>> {
         let j_params = &JubjubBn256::new();
         let de_params = Parameters::read(&hex::decode(params)?[..], true)?;
         let pvk = prepare_verifying_key::<Bn256>(&de_params.vk);
-        let h = Point::<Bn256, _>::read(&hex::decode(h)?[..], j_params)?;
-        let (h_x, h_y) = h.into_xy();
+
+        let s = &format!("{}", Fs::char())[2..];
+        let s_big = BigInt::from_str_radix(s, 16)?;
+        // Nullifier
+        let nullifier_big = BigInt::from_str_radix(nullifier_hex, 16)?;
+        if nullifier_big >= s_big {
+            return Err("x should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
+        }
+        let nullifier_raw = &nullifier_big.to_str_radix(10);
+        let nullifier = Fr::from_str(nullifier_raw).ok_or("couldn't parse Fr")?;
+        let nullifier_s = Fr::from_str(nullifier_raw).ok_or("couldn't parse Fr")?;
+        // Leaf hash
+        let leaf_big = BigInt::from_str_radix(leaf_hex, 16)?;
+        if leaf_big >= s_big {
+            return Err("x should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
+        }
+        let leaf_raw = &leaf_big.to_str_radix(10);
+        let leaf = Fr::from_str(leaf_raw).ok_or("couldn't parse Fr")?;
+        let leaf_s = Fr::from_str(leaf_raw).ok_or("couldn't parse Fr")?;
+        // Root hash
+        let root_big = BigInt::from_str_radix(root_hex, 16)?;
+        if root_big >= s_big {
+            return Err("x should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
+        }
+        let root_raw = &root_big.to_str_radix(10);
+        let root = Fr::from_str(root_raw).ok_or("couldn't parse Fr")?;
+        let root_s = Fr::from_str(root_raw).ok_or("couldn't parse Fr")?;
+
+
         let result = verify_proof(
             &pvk,
             &Proof::read(&hex::decode(proof)?[..])?,
             &[
-            h_x,
-            h_y
+                nullifier,
+                leaf,
+                root
             ])?;
 
         Ok(JsValue::from_serde(&KGVerify{
