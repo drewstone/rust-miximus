@@ -71,43 +71,6 @@ impl<'a, E: JubjubEngine> Circuit<E> for MerkleTreeCircuit<'a, E> where E: sapli
             let leaf_value = self.leaf.unwrap();
             Ok(leaf_value)
         })?;
-
-
-
-        // let mut xl_bits = match self.xl {
-        //     Some(x) => {
-        //         BitIterator::new(x.into_repr()).collect::<Vec<_>>()
-        //     }
-        //     None => {
-        //         vec![false; Fs::NUM_BITS as usize]
-        //     }
-        // };
-
-        // xl_bits.reverse();
-        // xl_bits.truncate(Fs::NUM_BITS as usize);
-        // let xl_bits = xl_bits.into_iter()
-        //                    .enumerate()
-        //                    .map(|(i, b)| AllocatedBit::alloc(cs.namespace(|| format!("left scalar bit {}", i)), Some(b)).unwrap())
-        //                    .map(|v| Boolean::from(v))
-        //                    .collect::<Vec<_>>();
-
-        // let mut xr_bits = match self.xr {
-        //     Some(x) => {
-        //         BitIterator::new(x.into_repr()).collect::<Vec<_>>()
-        //     }
-        //     None => {
-        //         vec![false; Fs::NUM_BITS as usize]
-        //     }
-        // };
-        // xr_bits.reverse();
-        // xr_bits.truncate(Fs::NUM_BITS as usize);
-        // let xr_bits = xr_bits.into_iter()
-        //                    .enumerate()
-        //                    .map(|(i, b)| AllocatedBit::alloc(cs.namespace(|| format!("right scalar bit {}", i)), Some(b)).unwrap())
-        //                    .map(|v| Boolean::from(v))
-        //                    .collect::<Vec<_>>();
-        
-
         
         let nullifier_bits = nullifier.into_bits_le_strict(cs.namespace(|| "nullifier bits")).unwrap();
         let xr_bits = xr.into_bits_le_strict(cs.namespace(|| "secret bits")).unwrap();
@@ -164,34 +127,18 @@ impl<'a, E: JubjubEngine> Circuit<E> for MerkleTreeCircuit<'a, E> where E: sapli
 
 fn merkle_hash_nodes<E: JubjubEngine, CS: ConstraintSystem<E>>(
 	mut cs: CS,
-	left: E::Fr,
-	right: E::Fr,
+	l: E::Fr,
+	r: E::Fr,
 	params: &E::Params
 ) -> Result<AllocatedNum<E>, SynthesisError> {
-    let mut left_bits = BitIterator::new(left.into_repr()).collect::<Vec<_>>();
-    left_bits.reverse();
-    left_bits.truncate(Fs::NUM_BITS as usize);
-
-    let left_bits = left_bits.into_iter()
-                       .enumerate()
-                       .map(|(i, b)| AllocatedBit::alloc(cs.namespace(|| format!("scalar bit {}", i)), Some(b)).unwrap())
-                       .map(|v| Boolean::from(v))
-                       .collect::<Vec<_>>();
-
-
-    let mut elt_bits = BitIterator::new(right.into_repr()).collect::<Vec<_>>();
-    elt_bits.reverse();
-    elt_bits.truncate(Fs::NUM_BITS as usize);
-
-    let elt_bits = elt_bits.into_iter()
-                       .enumerate()
-                       .map(|(i, b)| AllocatedBit::alloc(cs.namespace(|| format!("scalar bit {}", i)), Some(b)).unwrap())
-                       .map(|v| Boolean::from(v))
-                       .collect::<Vec<_>>();
-
+    let left = AllocatedNum::alloc(cs.namespace(|| "left"), || Ok(l) )?;
+    let right = AllocatedNum::alloc(cs.namespace(|| "right"), || Ok(r) )?;
+    let left_bits = left.into_bits_le_strict(cs.namespace(|| "left bits")).unwrap();
+    let right_bits = right.into_bits_le_strict(cs.namespace(|| "secret bits")).unwrap();
     let mut preimage = vec![];
     preimage.extend(left_bits);
-    preimage.extend(elt_bits);
+    preimage.extend(right_bits);
+
     return apply_pedersen(
     	cs.namespace(|| "to pedersen hash"),
     	&preimage,
