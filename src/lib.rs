@@ -1,66 +1,69 @@
+
+
 extern crate sapling_crypto;
-extern crate wasm_bindgen;
 extern crate bellman;
 extern crate pairing;
 extern crate ff;
 extern crate num_bigint;
 extern crate num_traits;
 extern crate rand;
+extern crate time;
 
-#[macro_use]
-extern crate serde_derive;
-
+use time::PreciseTime;
 use std::error::Error;
-
-use wasm_bindgen::prelude::*;
-
-use num_bigint::BigInt;
-use num_traits::Num;
-
 use bellman::{
     Circuit,
     SynthesisError,
     ConstraintSystem,
-    groth16::{Proof, Parameters, verify_proof, create_random_proof, prepare_verifying_key, generate_random_parameters}
+    groth16::{
+    	Proof, Parameters, verify_proof, create_random_proof, prepare_verifying_key,
+    	generate_random_parameters
+    }
 };
 
 use rand::{XorShiftRng, SeedableRng};
 use ff::{BitIterator, PrimeField};
-use pairing::{bn256::{Bn256, Fr}};
+use pairing::bn256::Bn256;
 use sapling_crypto::{
-    babyjubjub::{
+    alt_babyjubjub::AltJubjubBn256,
+    jubjub::{
         fs::Fs,
-        JubjubBn256,
-        FixedGenerators,
         JubjubEngine,
-        JubjubParams,
-        edwards::Point
     },
     circuit::{
-        baby_ecc::fixed_base_multiplication,
+        Assignment,
+        num::{AllocatedNum},
+        pedersen_hash,
         boolean::{AllocatedBit, Boolean}
     }
 };
 
-#[wasm_bindgen]
-extern "C" {
-    fn alert(s: &str);
-    #[wasm_bindgen(js_namespace = console)]
-    fn log(s: &str);
+/// This is our demo circuit for proving knowledge of the
+/// preimage of a MiMC hash invocation.
+struct MerkleTreeCircuit<'a, E: JubjubEngine> {
+    // nullifier
+    xl: Option<E::Fr>,
+    // secret
+    xr: Option<E::Fr>,
+    root: Option<E::Fr>,
+    proof: Vec<Option<(Boolean, E::Fr)>>,
+    params: &'a E::Params,
 }
 
-struct DiscreteLogCircuit<'a, E: JubjubEngine> {
-    pub params: &'a E::Params,
-    pub x: Option<E::Fr>,
-}
+/// Our demo circuit implements this `Circuit` trait which
+/// is used during paramgen and proving in order to
+/// synthesize the constraint system.
+impl<'a, E: JubjubEngine> Circuit<E> for MerkleTreeCircuit<'a, E> where E: sapling_crypto::jubjub::JubjubEngine {
+    fn synthesize<CS: ConstraintSystem<E>>(self, cs: &mut CS) -> Result<(), SynthesisError> {
+        let root_value = self.root;
+        // Expose inputs and do the bits decomposition of hash
+        let root = AllocatedNum::alloc(
+            cs.namespace(|| "old root"),
+            || Ok(*root_value.get()?)
+        )?;
+        root.inputize(cs.namespace(|| "root input"))?;
 
-impl<'a, E: JubjubEngine> Circuit<E> for DiscreteLogCircuit<'a, E> {
-    fn synthesize<CS: ConstraintSystem<E>>(
-        self,
-        cs: &mut CS
-    ) -> Result<(), SynthesisError>
-    {
-        let mut x_bits = match self.x {
+        let mut xl_bits = match self.xl {
             Some(x) => {
                 BitIterator::new(x.into_repr()).collect::<Vec<_>>()
             }
@@ -68,158 +71,147 @@ impl<'a, E: JubjubEngine> Circuit<E> for DiscreteLogCircuit<'a, E> {
                 vec![false; Fs::NUM_BITS as usize]
             }
         };
+        xl_bits.reverse();
+        xl_bits.truncate(Fs::NUM_BITS as usize);
 
-        x_bits.reverse();
-        x_bits.truncate(Fs::NUM_BITS as usize);
-
-        let x_bits = x_bits.into_iter()
+        let xl_bits = xl_bits.into_iter()
                            .enumerate()
                            .map(|(i, b)| AllocatedBit::alloc(cs.namespace(|| format!("scalar bit {}", i)), Some(b)).unwrap())
                            .map(|v| Boolean::from(v))
                            .collect::<Vec<_>>();
 
+        let mut xr_bits = match self.xr {
+            Some(x) => {
+                BitIterator::new(x.into_repr()).collect::<Vec<_>>()
+            }
+            None => {
+                vec![false; Fs::NUM_BITS as usize]
+            }
+        };
+        xr_bits.reverse();
+        xr_bits.truncate(Fs::NUM_BITS as usize);
 
-        let h = fixed_base_multiplication(
-            cs.namespace(|| "multiplication"),
-            FixedGenerators::ProofGenerationKey,
-            &x_bits,
-            self.params
-        )?;
+        let xr_bits = xr_bits.into_iter()
+                           .enumerate()
+                           .map(|(i, b)| AllocatedBit::alloc(cs.namespace(|| format!("scalar bit {}", i)), Some(b)).unwrap())
+                           .map(|v| Boolean::from(v))
+                           .collect::<Vec<_>>();
 
-        h.inputize(cs)?;
+        let mut preimage = vec![];
+        preimage.extend(xl_bits);
+        preimage.extend(xr_bits);
+
+        let mut hash = apply_pedersen(
+        	cs.namespace(|| "to data hash"),
+        	&preimage,
+        	self.params
+        ).unwrap();
+
+        for item in self.proof {
+			match item {
+                Some((right_side, elt)) => {
+				    if right_side.get_value().unwrap() {
+	                    hash = merkle_hash_nodes(
+	                    	cs.namespace(|| "to parent node hash"),
+	                    	hash.get_value().unwrap(),
+	                    	elt,
+	                    	&self.params
+	                    )?;
+				    } else {
+	                    hash = merkle_hash_nodes(
+	                    	cs.namespace(|| "to parent node hash"),
+	                    	elt,
+	                    	hash.get_value().unwrap(),
+	                    	&self.params
+	                    )?;
+				    }
+                },
+                None => (),
+            }
+        }
+
+        cs.enforce(
+            || "enforce new root equal to recalculated one",
+            |lc| lc + hash.get_variable(),
+            |lc| lc + CS::one(),
+            |lc| lc + root.get_variable()
+        );
 
         Ok(())
     }
 }
 
-#[derive(Serialize)]
-pub struct KGGenerate {
-    pub params: String
+fn merkle_hash_nodes<E: JubjubEngine, CS: ConstraintSystem<E>>(
+	mut cs: CS,
+	left: E::Fr,
+	right: E::Fr,
+	params: &E::Params
+) -> Result<AllocatedNum<E>, SynthesisError> {
+    let mut left_bits = BitIterator::new(left.into_repr()).collect::<Vec<_>>();
+    left_bits.reverse();
+    left_bits.truncate(Fs::NUM_BITS as usize);
+
+    let left_bits = left_bits.into_iter()
+                       .enumerate()
+                       .map(|(i, b)| AllocatedBit::alloc(cs.namespace(|| format!("scalar bit {}", i)), Some(b)).unwrap())
+                       .map(|v| Boolean::from(v))
+                       .collect::<Vec<_>>();
+
+
+    let mut elt_bits = BitIterator::new(right.into_repr()).collect::<Vec<_>>();
+    elt_bits.reverse();
+    elt_bits.truncate(Fs::NUM_BITS as usize);
+
+    let elt_bits = elt_bits.into_iter()
+                       .enumerate()
+                       .map(|(i, b)| AllocatedBit::alloc(cs.namespace(|| format!("scalar bit {}", i)), Some(b)).unwrap())
+                       .map(|v| Boolean::from(v))
+                       .collect::<Vec<_>>();
+
+    let mut preimage = vec![];
+    preimage.extend(left_bits);
+    preimage.extend(elt_bits);
+    return apply_pedersen(
+    	cs.namespace(|| "to pedersen hash"),
+    	&preimage,
+    	params,
+    )
 }
 
-#[derive(Serialize)]
-pub struct KGProof {
-    pub proof: String,
-    pub h: String
-}
-
-#[derive(Serialize)]
-pub struct KGVerify {
-    pub result: bool
-}
-
-#[wasm_bindgen(catch)]
-pub fn generate(seed_slice: &[u32]) -> Result<JsValue, JsValue> {
-    let res = || -> Result<JsValue, Box<Error>> {
-        let mut seed : [u32; 4] = [0; 4];
-        seed.copy_from_slice(seed_slice);
-        let rng = &mut XorShiftRng::from_seed(seed);
-
-        let j_params = &JubjubBn256::new();
-        let params = generate_random_parameters::<Bn256, _, _>(
-            DiscreteLogCircuit {
-                params: j_params,
-                x: None
-            },
-            rng
-        )?;
-
-        let mut v = vec![];
-
-        params.write(&mut v)?;
-
-        Ok(JsValue::from_serde(&KGGenerate {
-            params: hex::encode(&v[..])
-        })?)
-    }();
-    convert_error_to_jsvalue(res)
-}
-
-#[wasm_bindgen(catch)]
-pub fn prove(seed_slice: &[u32], params: &str, x_hex: &str) -> Result<JsValue, JsValue> {
-    let res = || -> Result<JsValue, Box<Error>> {
-        if params.len() == 0 {
-            return Err("Params are empty. Did you generate or load params?".into())
-        }
-        let de_params = Parameters::<Bn256>::read(&hex::decode(params)?[..], true)?;
-
-        let mut seed : [u32; 4] = [0; 4];
-        seed.copy_from_slice(seed_slice);
-        let rng = &mut XorShiftRng::from_seed(seed);
-        let params = &JubjubBn256::new();
-
-        let g = params.generator(FixedGenerators::ProofGenerationKey);
-        let s = &format!("{}", Fs::char())[2..];
-        let s_big = BigInt::from_str_radix(s, 16)?;
-        let x_big = BigInt::from_str_radix(x_hex, 16)?;
-        if x_big >= s_big {
-            return Err("x should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
-        }
-        let x_raw = &x_big.to_str_radix(10);
-        let x = Fr::from_str(x_raw).ok_or("couldn't parse Fr")?;
-
-        let xs = Fs::from_str(x_raw).ok_or("couldn't parse Fr")?;
-
-        let h = g.mul(xs, params);
-
-        let proof = create_random_proof(
-            DiscreteLogCircuit {
-                params: params,
-                x: Some(x),
-            },
-            &de_params,
-            rng
-        )?;
-
-        let mut v = vec![];
-        proof.write(&mut v)?;
-
-        let mut v2 = vec![];
-        h.write(&mut v2)?;
-
-        Ok(JsValue::from_serde(&KGProof {
-            proof: hex::encode(&v[..]),
-            h: hex::encode(&v2[..])
-        })?)
-    }();
-
-    convert_error_to_jsvalue(res)
-}
-
-#[wasm_bindgen(catch)]
-pub fn verify(params: &str, proof: &str, h: &str) -> Result<JsValue, JsValue> {
-    let res = || -> Result<JsValue, Box<Error>> {
-        let j_params = &JubjubBn256::new();
-        let de_params = Parameters::read(&hex::decode(params)?[..], true)?;
-        let pvk = prepare_verifying_key::<Bn256>(&de_params.vk);
-        let h = Point::<Bn256, _>::read(&hex::decode(h)?[..], j_params)?;
-        let (h_x, h_y) = h.into_xy();
-        let result = verify_proof(
-            &pvk,
-            &Proof::read(&hex::decode(proof)?[..])?,
-            &[
-            h_x,
-            h_y
-            ])?;
-
-        Ok(JsValue::from_serde(&KGVerify{
-            result: result
-        })?)
-    }();
-    convert_error_to_jsvalue(res)
-}
-
-fn convert_error_to_jsvalue(res: Result<JsValue, Box<Error>>) -> Result<JsValue, JsValue> {
-    if res.is_ok() {
-        Ok(res.ok().unwrap())
-    } else {
-        Err(JsValue::from_str(&res.err().unwrap().to_string()))
-    }
+fn apply_pedersen<E: JubjubEngine, CS: ConstraintSystem<E>>(
+    mut cs: CS,
+    elt: &[Boolean],
+    params: &E::Params,
+) -> Result<AllocatedNum<E>, SynthesisError> {
+    // Compute the hash of the from leaf
+    let hash = pedersen_hash::pedersen_hash(
+        cs.namespace(|| "to leaf content hash"),
+        pedersen_hash::Personalization::NoteCommitment,
+        &elt,
+        params
+    )?;
+    let cur_from = hash.get_x().clone();
+    Ok(cur_from)
 }
 
 #[test]
-fn print_g() {
-    let j_params = &JubjubBn256::new();
-    let g = j_params.generator(FixedGenerators::ProofGenerationKey);
-    println!("{}, {}", g.into_xy().0, g.into_xy().1);
+fn test_merkle() {
+    let mut seed : [u32; 4] = [0; 4];
+    seed.copy_from_slice(&[1u32]);
+    let rng = &mut XorShiftRng::from_seed(seed);
+    println!("generating setup...");
+    let start = PreciseTime::now();
+    
+    let j_params = &AltJubjubBn256::new();
+    let _params = generate_random_parameters::<Bn256, _, _>(
+        MerkleTreeCircuit {
+            params: j_params,
+            xl: None,
+            xr: None,
+            root: None,
+            proof: vec![],
+        },
+        rng
+    ).unwrap();
+    println!("setup generated in {} s", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
 }
