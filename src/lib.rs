@@ -1,5 +1,3 @@
-
-
 extern crate sapling_crypto;
 extern crate bellman;
 extern crate pairing;
@@ -20,7 +18,6 @@ use bellman::{
     }
 };
 
-use rand::{XorShiftRng, SeedableRng};
 use ff::{BitIterator, PrimeField};
 use pairing::bn256::Bn256;
 use sapling_crypto::{
@@ -41,9 +38,10 @@ use sapling_crypto::{
 /// preimage of a MiMC hash invocation.
 struct MerkleTreeCircuit<'a, E: JubjubEngine> {
     // nullifier
-    xl: Option<E::Fr>,
+    nullifier: Option<E::Fr>,
     // secret
     xr: Option<E::Fr>,
+    leaf: Option<E::Fr>,
     root: Option<E::Fr>,
     proof: Vec<Option<(Boolean, E::Fr)>>,
     params: &'a E::Params,
@@ -54,50 +52,67 @@ struct MerkleTreeCircuit<'a, E: JubjubEngine> {
 /// synthesize the constraint system.
 impl<'a, E: JubjubEngine> Circuit<E> for MerkleTreeCircuit<'a, E> where E: sapling_crypto::jubjub::JubjubEngine {
     fn synthesize<CS: ConstraintSystem<E>>(self, cs: &mut CS) -> Result<(), SynthesisError> {
-        let root_value = self.root;
-        // Expose inputs and do the bits decomposition of hash
-        let root = AllocatedNum::alloc(
-            cs.namespace(|| "old root"),
-            || Ok(*root_value.get()?)
-        )?;
-        root.inputize(cs.namespace(|| "root input"))?;
+        let root = AllocatedNum::alloc(cs.namespace(|| "root"), || {
+            let root_value = self.root.unwrap();
+            Ok(root_value)
+        })?;
 
-        let mut xl_bits = match self.xl {
-            Some(x) => {
-                BitIterator::new(x.into_repr()).collect::<Vec<_>>()
-            }
-            None => {
-                vec![false; Fs::NUM_BITS as usize]
-            }
-        };
-        xl_bits.reverse();
-        xl_bits.truncate(Fs::NUM_BITS as usize);
+        let nullifier = AllocatedNum::alloc(cs.namespace(|| "nullifier"), || {
+            let nullifier_value = self.nullifier.unwrap();
+            Ok(nullifier_value)
+        })?;
 
-        let xl_bits = xl_bits.into_iter()
-                           .enumerate()
-                           .map(|(i, b)| AllocatedBit::alloc(cs.namespace(|| format!("scalar bit {}", i)), Some(b)).unwrap())
-                           .map(|v| Boolean::from(v))
-                           .collect::<Vec<_>>();
+        let xr = AllocatedNum::alloc(cs.namespace(|| "xr"), || {
+            let xr_value = self.xr.unwrap();
+            Ok(xr_value)
+        })?;
 
-        let mut xr_bits = match self.xr {
-            Some(x) => {
-                BitIterator::new(x.into_repr()).collect::<Vec<_>>()
-            }
-            None => {
-                vec![false; Fs::NUM_BITS as usize]
-            }
-        };
-        xr_bits.reverse();
-        xr_bits.truncate(Fs::NUM_BITS as usize);
+        let leaf = AllocatedNum::alloc(cs.namespace(|| "leaf"), || {
+            let leaf_value = self.leaf.unwrap();
+            Ok(leaf_value)
+        })?;
 
-        let xr_bits = xr_bits.into_iter()
-                           .enumerate()
-                           .map(|(i, b)| AllocatedBit::alloc(cs.namespace(|| format!("scalar bit {}", i)), Some(b)).unwrap())
-                           .map(|v| Boolean::from(v))
-                           .collect::<Vec<_>>();
 
+
+        // let mut xl_bits = match self.xl {
+        //     Some(x) => {
+        //         BitIterator::new(x.into_repr()).collect::<Vec<_>>()
+        //     }
+        //     None => {
+        //         vec![false; Fs::NUM_BITS as usize]
+        //     }
+        // };
+
+        // xl_bits.reverse();
+        // xl_bits.truncate(Fs::NUM_BITS as usize);
+        // let xl_bits = xl_bits.into_iter()
+        //                    .enumerate()
+        //                    .map(|(i, b)| AllocatedBit::alloc(cs.namespace(|| format!("left scalar bit {}", i)), Some(b)).unwrap())
+        //                    .map(|v| Boolean::from(v))
+        //                    .collect::<Vec<_>>();
+
+        // let mut xr_bits = match self.xr {
+        //     Some(x) => {
+        //         BitIterator::new(x.into_repr()).collect::<Vec<_>>()
+        //     }
+        //     None => {
+        //         vec![false; Fs::NUM_BITS as usize]
+        //     }
+        // };
+        // xr_bits.reverse();
+        // xr_bits.truncate(Fs::NUM_BITS as usize);
+        // let xr_bits = xr_bits.into_iter()
+        //                    .enumerate()
+        //                    .map(|(i, b)| AllocatedBit::alloc(cs.namespace(|| format!("right scalar bit {}", i)), Some(b)).unwrap())
+        //                    .map(|v| Boolean::from(v))
+        //                    .collect::<Vec<_>>();
+        
+
+        
+        let nullifier_bits = nullifier.into_bits_le_strict(cs.namespace(|| "nullifier bits")).unwrap();
+        let xr_bits = xr.into_bits_le_strict(cs.namespace(|| "secret bits")).unwrap();
         let mut preimage = vec![];
-        preimage.extend(xl_bits);
+        preimage.extend(nullifier_bits);
         preimage.extend(xr_bits);
 
         let mut hash = apply_pedersen(
@@ -105,6 +120,13 @@ impl<'a, E: JubjubEngine> Circuit<E> for MerkleTreeCircuit<'a, E> where E: sapli
         	&preimage,
         	self.params
         ).unwrap();
+
+        cs.enforce(
+            || "enforce leaf equal to recalculated one",
+            |lc| lc + hash.get_variable(),
+            |lc| lc + CS::one(),
+            |lc| lc + leaf.get_variable()
+        );
 
         for item in self.proof {
 			match item {
@@ -193,24 +215,53 @@ fn apply_pedersen<E: JubjubEngine, CS: ConstraintSystem<E>>(
     Ok(cur_from)
 }
 
-#[test]
-fn test_merkle() {
-    let mut seed : [u32; 4] = [0; 4];
-    seed.copy_from_slice(&[1u32, 1u32, 1u32, 1u32]);
-    let rng = &mut XorShiftRng::from_seed(seed);
-    println!("generating setup...");
-    let start = PreciseTime::now();
-    
-    let j_params = &AltJubjubBn256::new();
-    let _params = generate_random_parameters::<Bn256, _, _>(
-        MerkleTreeCircuit {
+#[cfg(test)]
+mod test {
+    // use rand::{XorShiftRng, SeedableRng, Rng};
+    use bellman::groth16::generate_random_parameters;
+    use sapling_crypto::jubjub::JubjubEngine;
+    use pairing::{bn256::{Bn256, Fr}};
+    use sapling_crypto::{
+        alt_babyjubjub::AltJubjubBn256,
+    };
+    use rand::{XorShiftRng, SeedableRng};
+
+    use sapling_crypto::circuit::test::TestConstraintSystem;
+    use bellman::{
+        Circuit,
+    };
+    use rand::Rand;
+
+    use super::MerkleTreeCircuit;
+
+    use time::PreciseTime;
+
+    #[test]
+    fn test_merkle() {
+        let mut cs = TestConstraintSystem::<Bn256>::new();
+        let mut seed : [u32; 4] = [0; 4];
+        seed.copy_from_slice(&[1u32, 1u32, 1u32, 1u32]);
+        let rng = &mut XorShiftRng::from_seed(seed);
+        println!("generating setup...");
+        let start = PreciseTime::now();
+        
+        let j_params = &AltJubjubBn256::new();
+        let m_circuit = MerkleTreeCircuit {
             params: j_params,
-            xl: None,
-            xr: None,
-            root: None,
+            nullifier: Some(Fr::rand(rng)),
+            xr: Some(Fr::rand(rng)),
+            leaf: Some(Fr::rand(rng)),
+            root: Some(Fr::rand(rng)),
             proof: vec![],
-        },
-        rng
-    ).unwrap();
-    println!("setup generated in {} s", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
+        };
+
+        // let _params = generate_random_parameters::<Bn256, _, _>(
+        //     m_circuit,
+        //     rng
+        // ).unwrap();
+        // println!("setup generated in {} s", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
+        m_circuit.synthesize(&mut cs).unwrap();
+        println!("num constraints: {}", cs.num_constraints());
+        println!("num inputs: {}", cs.num_inputs());
+    }
 }
