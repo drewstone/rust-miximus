@@ -11,28 +11,17 @@ use bellman::{
     Circuit,
     SynthesisError,
     ConstraintSystem,
-    groth16::{
-    	// Proof, Parameters, verify_proof, create_random_proof, prepare_verifying_key,
-    	generate_random_parameters
-    }
 };
 
-use ff::{BitIterator, PrimeField, PrimeFieldRepr, Field};
-use pairing::bn256::Bn256;
+use ff::{Field};
 use sapling_crypto::{
     babyjubjub::{
-        fs::Fs,
-        JubjubBn256,
-        FixedGenerators,
         JubjubEngine,
-        JubjubParams,
-        edwards::Point
     },
     circuit::{
-        Assignment,
         num::{AllocatedNum},
         baby_pedersen_hash,
-        boolean::{AllocatedBit, Boolean}
+        boolean::{Boolean}
     }
 };
 
@@ -145,9 +134,6 @@ impl<'a, E: JubjubEngine> Circuit<E> for MerkleTreeCircuit<'a, E> {
 
 #[cfg(test)]
 mod test {
-    // use rand::{XorShiftRng, SeedableRng, Rng};
-    use bellman::groth16::generate_random_parameters;
-    use sapling_crypto::jubjub::JubjubEngine;
     use pairing::{bn256::{Bn256, Fr}};
     use sapling_crypto::{
         babyjubjub::{
@@ -185,12 +171,8 @@ mod test {
             proof: vec![],
         };
 
-        // let _params = generate_random_parameters::<Bn256, _, _>(
-        //     m_circuit,
-        //     rng
-        // ).unwrap();
-        // println!("setup generated in {} s", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
         m_circuit.synthesize(&mut cs).unwrap();
+        println!("setup generated in {} s", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
         println!("num constraints: {}", cs.num_constraints());
         println!("num inputs: {}", cs.num_inputs());
     }
