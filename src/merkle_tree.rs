@@ -95,7 +95,7 @@ pub fn build_merkle_tree_with_proof(
 
         println!("{:?}", curr_list);
         return (
-            MerkleTree { root: *hash_leaf_pair(depth - 1, *left, *right) },
+            MerkleTree { root: *hash_leaf_pair(depth, *left, *right) },
             curr_list,
         );
     }
@@ -127,7 +127,7 @@ pub fn build_merkle_tree_with_proof(
             temp_bool = true;
         }
 
-        let cur = hash_leaf_pair(depth - 1, *left, *right);
+        let cur = hash_leaf_pair(depth, *left, *right);
         if temp_bool {
             target_node = *cur.hash();
         }
@@ -146,12 +146,13 @@ fn hash_leaf_pair(index: usize, lhs: Tree, rhs: Tree) -> Box<Tree> {
     rhs_bool.reverse();
     let hash = sapling_crypto::baby_pedersen_hash::pedersen_hash::<Bn256, _>(
         sapling_crypto::baby_pedersen_hash::Personalization::MerkleTree(index),
-        lhs_bool.into_iter()
+        lhs_bool.clone().into_iter()
            .take(Fr::NUM_BITS as usize)
-           .chain(rhs_bool.into_iter().take(Fr::NUM_BITS as usize)),
+           .chain(rhs_bool.clone().into_iter().take(Fr::NUM_BITS as usize)),
         params
     ).into_xy().0;
     println!("HASH_LEAF_PAIR {:?}, {:?}, {:?}, {:?}", *lhs.hash(), *rhs.hash(), hash, index);
+    println!("\nBITS {:?}, {:?}, {:?}, {:?}\n", lhs_bool, rhs_bool, hash, index);
 
     let parent_node = Tree::Node {
         hash: hash,
@@ -245,6 +246,6 @@ mod test {
         print_merkle_tree(&_r.root);
         let _computed_root = compute_root_from_proof(target_leaf, proof);
         println!("\ncomputed root generated in {} s\n\n", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
-        println!("{:?}, {:?}", _computed_root, *_r.root.hash());
+        assert!(_computed_root == *_r.root.hash())
     }
 }
