@@ -7,7 +7,6 @@ extern crate num_traits;
 extern crate rand;
 extern crate time;
 
-use time::PreciseTime;
 use bellman::{
     Circuit,
     SynthesisError,
@@ -18,18 +17,21 @@ use bellman::{
     }
 };
 
-use ff::{BitIterator, PrimeField};
+use ff::{BitIterator, PrimeField, PrimeFieldRepr, Field};
 use pairing::bn256::Bn256;
 use sapling_crypto::{
-    alt_babyjubjub::AltJubjubBn256,
-    jubjub::{
+    babyjubjub::{
         fs::Fs,
+        JubjubBn256,
+        FixedGenerators,
         JubjubEngine,
+        JubjubParams,
+        edwards::Point
     },
     circuit::{
         Assignment,
         num::{AllocatedNum},
-        pedersen_hash,
+        baby_pedersen_hash,
         boolean::{AllocatedBit, Boolean}
     }
 };
@@ -40,7 +42,7 @@ struct MerkleTreeCircuit<'a, E: JubjubEngine> {
     // nullifier
     nullifier: Option<E::Fr>,
     // secret
-    xr: Option<E::Fr>,
+    secret: Option<E::Fr>,
     leaf: Option<E::Fr>,
     root: Option<E::Fr>,
     proof: Vec<Option<(Boolean, E::Fr)>>,
@@ -50,7 +52,7 @@ struct MerkleTreeCircuit<'a, E: JubjubEngine> {
 /// Our demo circuit implements this `Circuit` trait which
 /// is used during paramgen and proving in order to
 /// synthesize the constraint system.
-impl<'a, E: JubjubEngine> Circuit<E> for MerkleTreeCircuit<'a, E> where E: sapling_crypto::jubjub::JubjubEngine {
+impl<'a, E: JubjubEngine> Circuit<E> for MerkleTreeCircuit<'a, E> {
     fn synthesize<CS: ConstraintSystem<E>>(self, cs: &mut CS) -> Result<(), SynthesisError> {
         let root = AllocatedNum::alloc(cs.namespace(|| "root"), || {
             let root_value = self.root.unwrap();
@@ -58,34 +60,41 @@ impl<'a, E: JubjubEngine> Circuit<E> for MerkleTreeCircuit<'a, E> where E: sapli
         })?;
         root.inputize(cs.namespace(|| "public input root"))?;
 
-        let nullifier = AllocatedNum::alloc(cs.namespace(|| "nullifier"), || {
-            let nullifier_value = self.nullifier.unwrap();
-            Ok(nullifier_value)
-        })?;
+        let nullifier = AllocatedNum::alloc(cs.namespace(|| "nullifier"),
+            || Ok(match self.nullifier {
+                Some(n) => n,
+                None => E::Fr::zero(),
+            })
+        )?;
         nullifier.inputize(cs.namespace(|| "public input nullifier"))?;
 
-        let xr = AllocatedNum::alloc(cs.namespace(|| "xr"), || {
-            let xr_value = self.xr.unwrap();
-            Ok(xr_value)
-        })?;
+        let secret = AllocatedNum::alloc(cs.namespace(|| "secret"),
+            || Ok(match self.secret {
+                Some(s) => s,
+                None => E::Fr::zero(),
+            })
+        )?;
 
-        let leaf = AllocatedNum::alloc(cs.namespace(|| "leaf"), || {
-            let leaf_value = self.leaf.unwrap();
-            Ok(leaf_value)
-        })?;
+        let leaf = AllocatedNum::alloc(cs.namespace(|| "leaf"),
+            || Ok(match self.leaf {
+                Some(l) => l,
+                None => E::Fr::zero(),
+            })
+        )?;
         leaf.inputize(cs.namespace(|| "public input leaf"))?;
         
         let nullifier_bits = nullifier.into_bits_le_strict(cs.namespace(|| "nullifier bits")).unwrap();
-        let xr_bits = xr.into_bits_le_strict(cs.namespace(|| "secret bits")).unwrap();
+        let secret_bits = secret.into_bits_le_strict(cs.namespace(|| "secret bits")).unwrap();
         let mut preimage = vec![];
         preimage.extend(nullifier_bits);
-        preimage.extend(xr_bits);
+        preimage.extend(secret_bits);
 
-        let mut hash = apply_pedersen(
-        	cs.namespace(|| "to data hash"),
-        	&preimage,
-        	self.params
-        ).unwrap();
+        let mut hash = baby_pedersen_hash::pedersen_hash(
+            cs.namespace(|| "computation of leaf pedersen hash"),
+            baby_pedersen_hash::Personalization::NoteCommitment,
+            &preimage,
+            self.params
+        )?.get_x().clone();
 
         cs.enforce(
             || "enforce leaf equal to recalculated one",
@@ -94,24 +103,30 @@ impl<'a, E: JubjubEngine> Circuit<E> for MerkleTreeCircuit<'a, E> where E: sapli
             |lc| lc + leaf.get_variable()
         );
 
-        for item in self.proof {
-			match item {
-                Some((right_side, elt)) => {
-				    if right_side.get_value().unwrap() {
-	                    hash = merkle_hash_nodes(
-	                    	cs.namespace(|| "to parent node hash"),
-	                    	hash.get_value().unwrap(),
-	                    	elt,
-	                    	&self.params
-	                    )?;
-				    } else {
-	                    hash = merkle_hash_nodes(
-	                    	cs.namespace(|| "to parent node hash"),
-	                    	elt,
-	                    	hash.get_value().unwrap(),
-	                    	&self.params
-	                    )?;
-				    }
+        for i in 0..self.proof.len() {
+			match self.proof[i] {
+                Some((ref right_side, ref element)) => {
+                    let elt = AllocatedNum::alloc(cs.namespace(|| "elt"), || Ok(*element))?;
+
+                    // Swap the two if the current subtree is on the right
+                    let (xl, xr) = AllocatedNum::conditionally_reverse(
+                        cs.namespace(|| "conditional reversal of preimage"),
+                        &hash,
+                        &elt,
+                        &right_side
+                    )?;
+
+                    let mut preimage = vec![];
+                    preimage.extend(xl.into_bits_le(cs.namespace(|| "xl into bits"))?);
+                    preimage.extend(xr.into_bits_le(cs.namespace(|| "xr into bits"))?);
+
+                    // Compute the new subtree value
+                    hash = baby_pedersen_hash::pedersen_hash(
+                        cs.namespace(|| "computation of pedersen hash"),
+                        baby_pedersen_hash::Personalization::MerkleTree(i as usize),
+                        &preimage,
+                        self.params
+                    )?.get_x().clone(); // Injective encoding
                 },
                 None => (),
             }
@@ -128,43 +143,6 @@ impl<'a, E: JubjubEngine> Circuit<E> for MerkleTreeCircuit<'a, E> where E: sapli
     }
 }
 
-fn merkle_hash_nodes<E: JubjubEngine, CS: ConstraintSystem<E>>(
-	mut cs: CS,
-	l: E::Fr,
-	r: E::Fr,
-	params: &E::Params
-) -> Result<AllocatedNum<E>, SynthesisError> {
-    let left = AllocatedNum::alloc(cs.namespace(|| "left"), || Ok(l) )?;
-    let right = AllocatedNum::alloc(cs.namespace(|| "right"), || Ok(r) )?;
-    let left_bits = left.into_bits_le_strict(cs.namespace(|| "left bits")).unwrap();
-    let right_bits = right.into_bits_le_strict(cs.namespace(|| "secret bits")).unwrap();
-    let mut preimage = vec![];
-    preimage.extend(left_bits);
-    preimage.extend(right_bits);
-
-    return apply_pedersen(
-    	cs.namespace(|| "to pedersen hash"),
-    	&preimage,
-    	params,
-    )
-}
-
-fn apply_pedersen<E: JubjubEngine, CS: ConstraintSystem<E>>(
-    mut cs: CS,
-    elt: &[Boolean],
-    params: &E::Params,
-) -> Result<AllocatedNum<E>, SynthesisError> {
-    // Compute the hash of the from leaf
-    let hash = pedersen_hash::pedersen_hash(
-        cs.namespace(|| "to leaf content hash"),
-        pedersen_hash::Personalization::NoteCommitment,
-        &elt,
-        params
-    )?;
-    let cur_from = hash.get_x().clone();
-    Ok(cur_from)
-}
-
 #[cfg(test)]
 mod test {
     // use rand::{XorShiftRng, SeedableRng, Rng};
@@ -172,7 +150,9 @@ mod test {
     use sapling_crypto::jubjub::JubjubEngine;
     use pairing::{bn256::{Bn256, Fr}};
     use sapling_crypto::{
-        alt_babyjubjub::AltJubjubBn256,
+        babyjubjub::{
+            JubjubBn256
+        }
     };
     use rand::{XorShiftRng, SeedableRng};
 
@@ -195,11 +175,11 @@ mod test {
         println!("generating setup...");
         let start = PreciseTime::now();
         
-        let j_params = &AltJubjubBn256::new();
+        let j_params = &JubjubBn256::new();
         let m_circuit = MerkleTreeCircuit {
             params: j_params,
             nullifier: Some(Fr::rand(rng)),
-            xr: Some(Fr::rand(rng)),
+            secret: Some(Fr::rand(rng)),
             leaf: Some(Fr::rand(rng)),
             root: Some(Fr::rand(rng)),
             proof: vec![],
