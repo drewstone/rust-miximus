@@ -1,3 +1,4 @@
+extern crate wasm_bindgen;
 extern crate sapling_crypto;
 extern crate bellman;
 extern crate pairing;
@@ -25,6 +26,9 @@ use sapling_crypto::{
     }
 };
 
+mod tree;
+mod merkle_tree;
+
 /// This is our demo circuit for proving knowledge of the
 /// preimage of a MiMC hash invocation.
 struct MerkleTreeCircuit<'a, E: JubjubEngine> {
@@ -43,12 +47,13 @@ struct MerkleTreeCircuit<'a, E: JubjubEngine> {
 /// synthesize the constraint system.
 impl<'a, E: JubjubEngine> Circuit<E> for MerkleTreeCircuit<'a, E> {
     fn synthesize<CS: ConstraintSystem<E>>(self, cs: &mut CS) -> Result<(), SynthesisError> {
+        // root is public merkle root of the merkle tree
         let root = AllocatedNum::alloc(cs.namespace(|| "root"), || {
             let root_value = self.root.unwrap();
             Ok(root_value)
         })?;
         root.inputize(cs.namespace(|| "public input root"))?;
-
+        // nullifier is the left side of the preimage
         let nullifier = AllocatedNum::alloc(cs.namespace(|| "nullifier"),
             || Ok(match self.nullifier {
                 Some(n) => n,
@@ -56,47 +61,49 @@ impl<'a, E: JubjubEngine> Circuit<E> for MerkleTreeCircuit<'a, E> {
             })
         )?;
         nullifier.inputize(cs.namespace(|| "public input nullifier"))?;
-
+        // secret is the right side of the preimage
         let secret = AllocatedNum::alloc(cs.namespace(|| "secret"),
             || Ok(match self.secret {
                 Some(s) => s,
                 None => E::Fr::zero(),
             })
         )?;
-
+        // leaf is a private input (potentially not needed)
         let leaf = AllocatedNum::alloc(cs.namespace(|| "leaf"),
             || Ok(match self.leaf {
                 Some(l) => l,
                 None => E::Fr::zero(),
             })
         )?;
-        leaf.inputize(cs.namespace(|| "public input leaf"))?;
-        
+        // construct preimage using [nullifier_bits|secret_bits] concatenation
         let nullifier_bits = nullifier.into_bits_le_strict(cs.namespace(|| "nullifier bits")).unwrap();
         let secret_bits = secret.into_bits_le_strict(cs.namespace(|| "secret bits")).unwrap();
         let mut preimage = vec![];
         preimage.extend(nullifier_bits);
         preimage.extend(secret_bits);
-
+        // compute leaf hash using pedersen hash of preimage
         let mut hash = baby_pedersen_hash::pedersen_hash(
             cs.namespace(|| "computation of leaf pedersen hash"),
             baby_pedersen_hash::Personalization::NoteCommitment,
             &preimage,
             self.params
         )?.get_x().clone();
-
+        // enforce the hash is equivalent to the private leaf input
         cs.enforce(
             || "enforce leaf equal to recalculated one",
             |lc| lc + hash.get_variable(),
             |lc| lc + CS::one(),
             |lc| lc + leaf.get_variable()
         );
-
+        // reconstruct merkle root hash using the private merkle path
         for i in 0..self.proof.len() {
 			match self.proof[i] {
                 Some((ref side, ref element)) => {
                     let elt = AllocatedNum::alloc(cs.namespace(|| format!("elt {}", i)), || Ok(*element))?;
-                    let right_side = Boolean::from(AllocatedBit::alloc(cs.namespace(|| format!("position bit {}", i)), Some(*side)).unwrap());
+                    let right_side = Boolean::from(AllocatedBit::alloc(
+                        cs.namespace(|| format!("position bit {}", i)),
+                        Some(*side)).unwrap()
+                    );
                     // Swap the two if the current subtree is on the right
                     let (xl, xr) = AllocatedNum::conditionally_reverse(
                         cs.namespace(|| format!("conditional reversal of preimage {}", i)),
@@ -155,7 +162,7 @@ mod test {
     use time::PreciseTime;
 
     #[test]
-    fn test_merkle() {
+    fn test_merkle_circuit() {
         let mut cs = TestConstraintSystem::<Bn256>::new();
         let mut seed : [u32; 4] = [0; 4];
         seed.copy_from_slice(&[1u32, 1u32, 1u32, 1u32]);

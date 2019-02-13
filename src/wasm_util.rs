@@ -22,7 +22,6 @@ use rand::{XorShiftRng, SeedableRng};
 use ff::{BitIterator, PrimeField};
 use pairing::bn256::Bn256;
 use sapling_crypto::{
-    alt_babyjubjub::AltJubjubBn256,
     jubjub::{
         fs::Fs,
         JubjubEngine,
@@ -196,14 +195,6 @@ pub fn verify(params: &str, proof: &str, nullifier_hex: &str, leaf_hex: &str, ro
         let nullifier_raw = &nullifier_big.to_str_radix(10);
         let nullifier = Fr::from_str(nullifier_raw).ok_or("couldn't parse Fr")?;
         let nullifier_s = Fr::from_str(nullifier_raw).ok_or("couldn't parse Fr")?;
-        // Leaf hash
-        let leaf_big = BigInt::from_str_radix(leaf_hex, 16)?;
-        if leaf_big >= s_big {
-            return Err("x should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
-        }
-        let leaf_raw = &leaf_big.to_str_radix(10);
-        let leaf = Fr::from_str(leaf_raw).ok_or("couldn't parse Fr")?;
-        let leaf_s = Fr::from_str(leaf_raw).ok_or("couldn't parse Fr")?;
         // Root hash
         let root_big = BigInt::from_str_radix(root_hex, 16)?;
         if root_big >= s_big {
@@ -219,7 +210,6 @@ pub fn verify(params: &str, proof: &str, nullifier_hex: &str, leaf_hex: &str, ro
             &Proof::read(&hex::decode(proof)?[..])?,
             &[
                 nullifier,
-                leaf,
                 root
             ])?;
 
