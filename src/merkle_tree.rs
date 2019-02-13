@@ -32,50 +32,44 @@ pub fn create_leaf_from_preimage(nullifier: pairing::bn256::Fr, secret: pairing:
     };
 }
 
-pub fn create_leaf_list(mut nodes: Vec<pairing::bn256::Fr>, depth: usize) -> Vec<Tree> {
-    for _ in 0..((2 << depth) - nodes.len()) {
+pub fn create_leaf_list(mut nodes: Vec<pairing::bn256::Fr>, depth: usize) -> Vec<Box<Tree>> {
+    for _ in 0..((2 << (depth - 1)) - nodes.len()) {
         nodes.push(<pairing::bn256::Fr>::zero());
     }
 
-    let mut tree_nodes: Vec<Tree> = vec![];
+    let mut tree_nodes: Vec<Box<Tree>> = vec![];
     for i in 0..nodes.len() {
-        tree_nodes.push(Tree::Empty {
+        tree_nodes.push(Box::new(Tree::Empty {
             hash: nodes[i],
             parent: None,
-        });
+        }));
     }
 
     return tree_nodes;
 }
 
-pub fn build_merkle_tree(mut nodes: Vec<Tree>, depth: usize) -> MerkleTree {
+pub fn build_merkle_tree(mut nodes: Vec<Box<Tree>>, depth: usize) -> MerkleTree {
     if nodes.len() == 2 {
         let left = nodes.remove(0);
         let right = nodes.remove(0);
         return MerkleTree {
-            root: hash_leaf_pair(depth, left, right),
+            root: *hash_leaf_pair(depth, *left, *right),
         };
     }
-    while (2 << depth) - nodes.len() > 0 {
-        nodes.push(Tree::Empty {
-            hash: <pairing::bn256::Fr>::zero(),
-            parent: None,
-        });
-    }
 
-    for _ in 0..((2 << depth) - nodes.len()) {
-        nodes.push( Tree::Empty {
+    for _ in 0..((2 << (depth - 1)) - nodes.len()) {
+        nodes.push(Box::new(Tree::Empty {
             hash: <pairing::bn256::Fr>::zero(),
             parent: None
-        });
+        }));
     }
 
-    let mut next_nodes: Vec<Tree> = vec![];
+    let mut next_nodes: Vec<Box<Tree>> = vec![];
     for i in 0..nodes.len() {
         if i % 2 != 0 { continue }
         let left = nodes.remove(0);
         let right = nodes.remove(0);
-        let cur = hash_leaf_pair(i, left, right);
+        let cur = hash_leaf_pair(i, *left, *right);
         next_nodes.push(cur);
     }
 
@@ -83,11 +77,12 @@ pub fn build_merkle_tree(mut nodes: Vec<Tree>, depth: usize) -> MerkleTree {
 }
 
 pub fn build_merkle_tree_with_proof(
-    mut nodes: Vec<Tree>,
+    mut nodes: Vec<Box<Tree>>,
     depth: usize,
     mut target_node: pairing::bn256::Fr,
     mut curr_list: Vec<Option<(bool, pairing::bn256::Fr)>>
 ) -> (MerkleTree, Vec<Option<(bool, pairing::bn256::Fr)>>) {
+    println!("{:?}", depth);
     if nodes.len() == 2 {
         let left = nodes.remove(0);
         let right = nodes.remove(0);
@@ -98,53 +93,55 @@ pub fn build_merkle_tree_with_proof(
             curr_list.push(Some((false, *left.hash())));
         }
 
+        println!("{:?}", curr_list);
         return (
-            MerkleTree { root: hash_leaf_pair(depth, left, right) },
+            MerkleTree { root: *hash_leaf_pair(depth - 1, *left, *right) },
             curr_list,
         );
     }
 
-    while (2 << depth) - nodes.len() > 0 {
-        nodes.push(Tree::Empty {
+    for _ in 0..((2 << (depth - 1)) - nodes.len()) {
+        nodes.push(Box::new(Tree::Empty {
             hash: <pairing::bn256::Fr>::zero(),
             parent: None,
-        });
+        }));
     }
 
-    let mut new_nodes: Vec<Tree> = vec![];
-
+    let mut new_nodes: Vec<Box<Tree>> = vec![];
+    println!("{:?}", nodes.len());
     for i in 0..nodes.len() {
+        println!("Round {:?}", i);
         if i % 2 != 0 { continue }
         let left = nodes.remove(0);
         let right = nodes.remove(0);
-        let mut temp_b = false;
-
+        println!("{:?}, {:?}, {:?}, {:?}", *left.hash(), *right.hash(), target_node, curr_list);
+        let mut temp_bool = false;
         if target_node == *left.hash() {
-            curr_list.push(Some((false, *right.hash())));
-            temp_b = true;
+            curr_list.push(Some((true, *right.hash())));
+            temp_bool = true;
+
         }
 
         if target_node == *right.hash() {
-            curr_list.push(Some((true, *left.hash())));
-            temp_b = true;
+            curr_list.push(Some((false, *left.hash())));
+            temp_bool = true;
         }
 
-        let cur = hash_leaf_pair(depth, left, right);
-        
-        if temp_b {
+        let cur = hash_leaf_pair(depth - 1, *left, *right);
+        if temp_bool {
             target_node = *cur.hash();
         }
-
+        println!("{:?}\n", target_node);
         new_nodes.push(cur);
     }
 
     return build_merkle_tree_with_proof(new_nodes, depth - 1, target_node, curr_list);
 }
 
-fn hash_leaf_pair(index: usize, lhs: Tree, rhs: Tree) -> Tree {
+fn hash_leaf_pair(index: usize, lhs: Tree, rhs: Tree) -> Box<Tree> {
     let params = &JubjubBn256::new();
-    let mut lhs_bool: Vec<bool> = BitIterator::new(lhs.hash().into_repr()).collect();
-    let mut rhs_bool: Vec<bool> = BitIterator::new(rhs.hash().into_repr()).collect();
+    let mut lhs_bool: Vec<bool> = BitIterator::new((lhs).hash().into_repr()).collect();
+    let mut rhs_bool: Vec<bool> = BitIterator::new((rhs).hash().into_repr()).collect();
     lhs_bool.reverse();
     rhs_bool.reverse();
     let hash = sapling_crypto::baby_pedersen_hash::pedersen_hash::<Bn256, _>(
@@ -154,6 +151,7 @@ fn hash_leaf_pair(index: usize, lhs: Tree, rhs: Tree) -> Tree {
            .chain(rhs_bool.into_iter().take(Fr::NUM_BITS as usize)),
         params
     ).into_xy().0;
+    println!("HASH_LEAF_PAIR {:?}, {:?}, {:?}, {:?}", *lhs.hash(), *rhs.hash(), hash, index);
 
     let parent_node = Tree::Node {
         hash: hash,
@@ -161,29 +159,33 @@ fn hash_leaf_pair(index: usize, lhs: Tree, rhs: Tree) -> Tree {
         right: Box::new(rhs),
         parent: None,
     };
-    return parent_node;
+    return Box::new(parent_node);
 }
 
 fn compute_root_from_proof(leaf: pairing::bn256::Fr, path: Vec<Option<(bool, pairing::bn256::Fr)>>) -> pairing::bn256::Fr {
     let mut hash = leaf;
-
+    println!("{:?}", hash);
+    for item in path.clone() {
+        println!("{:?}", item.unwrap());
+    }
     for i in 0..path.len() {
+        println!("Compute round {:?}, {:?}", i, hash);
         match path[i] {
             Some((right_side, pt)) => {
-                println!("{:?}, {:?}", right_side, pt);
                 if right_side {
                     hash = *hash_leaf_pair(
-                        i,
+                        path.len() - i,
                         Tree::Empty { hash: hash, parent: None },
                         Tree::Empty { hash: pt, parent: None })
                     .hash();
                 } else {
                     hash = *hash_leaf_pair(
-                        i,
+                        path.len() - i,
                         Tree::Empty { hash: pt, parent: None },
                         Tree::Empty { hash: hash, parent: None })
                     .hash();
                 }
+                println!("Path {:?}, {:?}, {:?}", right_side, pt, hash);
             },
             None => {},
         }
@@ -197,7 +199,7 @@ fn print_merkle_tree(tree: &Tree) {
         Tree::Node { hash: _, ref left, ref right, parent: _ } => {
             print_merkle_tree(left);
             print_merkle_tree(right);
-            println!("{:?}, {:?}", left, right);
+            println!("{:?}, {:?}, {:?}", left.hash(), right.hash(), tree.hash());
         },
         _ => { return },
     }
@@ -214,6 +216,7 @@ mod test {
     use super::build_merkle_tree;
     use pairing::{bn256::{Fr}};
     use rand::{XorShiftRng, SeedableRng};
+    use time::PreciseTime;
 
     #[test]
     fn test_merkle_tree() {
@@ -224,16 +227,24 @@ mod test {
     fn test_proof_creation() {
         let mut seed : [u32; 4] = [0; 4];
         seed.copy_from_slice(&[1u32, 1u32, 1u32, 1u32]);
+        let start = PreciseTime::now();    
         let rng = &mut XorShiftRng::from_seed(seed);
+        println!("\nsetup generated in {} s\n\n", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
+
         let target_leaf = Fr::rand(rng);
+        println!("\nrandom target created in {} s\n\n", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
         let mut leaves: Vec<pairing::bn256::Fr> = vec![1,2,3,4,5,6,7].iter().map(|_| Fr::rand(rng)).collect();
+        println!("\nleaves created in {} s\n\n", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
         leaves.push(target_leaf);
-        println!("{:?}", leaves);
+        println!("\nleaves pushed in {} s\n\n", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
         let tree_nodes = create_leaf_list(leaves, 3);
-        
+        println!("{:?}", tree_nodes.len());
+        println!("\nleaf list generated in {} s\n\n", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
         let (_r, proof) = build_merkle_tree_with_proof(tree_nodes, 3, target_leaf, vec![]);
+        println!("\ntree proof generated in {} s\n\n", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
         print_merkle_tree(&_r.root);
         let _computed_root = compute_root_from_proof(target_leaf, proof);
+        println!("\ncomputed root generated in {} s\n\n", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
         println!("{:?}, {:?}", _computed_root, *_r.root.hash());
     }
 }

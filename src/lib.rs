@@ -14,7 +14,7 @@ use bellman::{
     ConstraintSystem,
 };
 
-use ff::{Field};
+use ff::{Field, PrimeField};
 use sapling_crypto::{
     babyjubjub::{
         JubjubEngine,
@@ -25,6 +25,8 @@ use sapling_crypto::{
         boolean::{Boolean, AllocatedBit}
     }
 };
+
+use pairing::{bn256::{Fr}};
 
 mod tree;
 mod merkle_tree;
@@ -76,8 +78,8 @@ impl<'a, E: JubjubEngine> Circuit<E> for MerkleTreeCircuit<'a, E> {
             })
         )?;
         // construct preimage using [nullifier_bits|secret_bits] concatenation
-        let nullifier_bits = nullifier.into_bits_le_strict(cs.namespace(|| "nullifier bits")).unwrap();
-        let secret_bits = secret.into_bits_le_strict(cs.namespace(|| "secret bits")).unwrap();
+        let nullifier_bits = nullifier.into_bits_le_strict(cs.namespace(|| "nullifier bits")).unwrap().into_iter().take(Fr::NUM_BITS as usize);
+        let secret_bits = secret.into_bits_le_strict(cs.namespace(|| "secret bits")).unwrap().into_iter().take(Fr::NUM_BITS as usize);
         let mut preimage = vec![];
         preimage.extend(nullifier_bits);
         preimage.extend(secret_bits);
@@ -107,8 +109,8 @@ impl<'a, E: JubjubEngine> Circuit<E> for MerkleTreeCircuit<'a, E> {
                     // Swap the two if the current subtree is on the right
                     let (xl, xr) = AllocatedNum::conditionally_reverse(
                         cs.namespace(|| format!("conditional reversal of preimage {}", i)),
-                        &hash,
                         &elt,
+                        &hash,
                         &right_side
                     )?;
 

@@ -7,9 +7,9 @@ pub enum Tree {
     },
     Node {
         hash: pairing::bn256::Fr,
-        left: &Tree,
-        right: &Tree,
-        parent: &Tree,
+        left: Box<Tree>,
+        right: Box<Tree>,
+        parent: Option<Box<Tree>>,
     },
 }
 
