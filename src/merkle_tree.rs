@@ -10,7 +10,7 @@ use tree::Tree;
 
 #[derive(Debug)]
 pub struct MerkleTree {
-    root: Tree,
+    pub root: Tree,
 }
 
 pub fn create_leaf_from_preimage(nullifier: pairing::bn256::Fr, secret: pairing::bn256::Fr) -> Tree {
@@ -131,7 +131,7 @@ pub fn build_merkle_tree_with_proof(
     return build_merkle_tree_with_proof(new_nodes, depth - 1, target_node, curr_list);
 }
 
-fn hash_leaf_pair(index: usize, lhs: Tree, rhs: Tree) -> Box<Tree> {
+pub fn hash_leaf_pair(index: usize, lhs: Tree, rhs: Tree) -> Box<Tree> {
     let params = &JubjubBn256::new();
     let mut lhs_bool: Vec<bool> = BitIterator::new((lhs).hash().into_repr()).collect();
     let mut rhs_bool: Vec<bool> = BitIterator::new((rhs).hash().into_repr()).collect();
@@ -152,7 +152,7 @@ fn hash_leaf_pair(index: usize, lhs: Tree, rhs: Tree) -> Box<Tree> {
     });
 }
 
-fn compute_root_from_proof(leaf: pairing::bn256::Fr, path: Vec<Option<(bool, pairing::bn256::Fr)>>) -> pairing::bn256::Fr {
+pub fn compute_root_from_proof(leaf: pairing::bn256::Fr, path: Vec<Option<(bool, pairing::bn256::Fr)>>) -> pairing::bn256::Fr {
     let mut hash = leaf;
     for i in 0..path.len() {
         match path[i] {
@@ -178,7 +178,7 @@ fn compute_root_from_proof(leaf: pairing::bn256::Fr, path: Vec<Option<(bool, pai
     return hash;
 }
 
-fn print_merkle_tree(tree: &Tree) {
+pub fn print_merkle_tree(tree: &Tree) {
     match tree {
         Tree::Node { hash: _, ref left, ref right, parent: _ } => {
             print_merkle_tree(left);
