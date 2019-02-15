@@ -12,10 +12,6 @@ extern crate wasm_bindgen;
 extern crate serde_derive;
 
 use wasm_bindgen::prelude::*;
-use rand::{XorShiftRng, SeedableRng};
-use bellman::groth16::{Proof, Parameters, verify_proof, create_random_proof, prepare_verifying_key, generate_random_parameters};use num_bigint::BigInt;
-use num_traits::Num;
-use std::error::Error;
 
 use bellman::{
     Circuit,
@@ -26,9 +22,7 @@ use bellman::{
 use ff::{Field, PrimeField};
 use sapling_crypto::{
     babyjubjub::{
-        fs::Fs,
         JubjubEngine,
-        JubjubBn256,
     },
     circuit::{
         num::{AllocatedNum},
@@ -37,10 +31,12 @@ use sapling_crypto::{
     }
 };
 
-use pairing::{bn256::{Bn256, Fr}};
+use pairing::{bn256::{Fr}};
 
-mod tree;
 mod merkle_tree;
+mod zk_util;
+
+use zk_util::{generate, prove, verify};
 
 /// Circuit for proving knowledge of preimage of leaf in merkle tree
 struct MerkleTreeCircuit<'a, E: JubjubEngine> {
@@ -141,197 +137,44 @@ extern "C" {
     fn alert(s: &str);
 }
 
-#[derive(Serialize)]
-pub struct KGGenerate {
-    pub params: String
-}
-
-#[derive(Serialize)]
-pub struct KGProof {
-    pub proof: String,
-    // pub nullifier: String,
-    // pub secret: String,
-    // pub leaf: String,
-    // pub path: Vec<String>
-}
-
-#[derive(Serialize)]
-pub struct KGVerify {
-    pub result: bool
-}
-
 #[wasm_bindgen(catch)]
-pub fn generate(seed_slice: &[u32]) -> Result<JsValue, JsValue> {
-    let res = || -> Result<JsValue, Box<Error>> {
-        let mut seed : [u32; 4] = [0; 4];
-        seed.copy_from_slice(seed_slice);
-        let rng = &mut XorShiftRng::from_seed(seed);
-
-        let j_params = &JubjubBn256::new();
-        let params = generate_random_parameters::<Bn256, _, _>(
-            MerkleTreeCircuit {
-                params: j_params,
-                nullifier: None,
-                secret: None,
-                root: None,
-                proof: vec![],
-            },
-            rng,
-        )?;
-
-        let mut v = vec![];
-
-        params.write(&mut v)?;
-
-        Ok(JsValue::from_serde(&KGGenerate {
-            params: hex::encode(&v[..])
-        })?)
-    }();
-    convert_error_to_jsvalue(res)
-}
-
-#[wasm_bindgen(catch)]
-pub fn prove(
-        seed_slice: &[u32],
-        params: &str,
-        nullifier_hex: &str,
-        secret_hex: &str,
-        root_hex: &str,
-        proof_path_hex: &str,
-        proof_path_sides: &str,
-) -> Result<JsValue, JsValue> {
-    let res = || -> Result<JsValue, Box<Error>> {
-        if params.len() == 0 {
-            return Err("Params are empty. Did you generate or load params?".into())
-        }
-        let de_params = Parameters::<Bn256>::read(&hex::decode(params)?[..], true)?;
-        let j_params = &JubjubBn256::new();
-
-        let mut seed : [u32; 4] = [0; 4];
-        seed.copy_from_slice(seed_slice);
-        let rng = &mut XorShiftRng::from_seed(seed);
-        let params = &JubjubBn256::new();
-
-        let s = &format!("{}", Fs::char())[2..];
-        let s_big = BigInt::from_str_radix(s, 16)?;
-        // Nullifier
-        let nullifier_big = BigInt::from_str_radix(nullifier_hex, 16)?;
-        if nullifier_big >= s_big {
-            return Err("nullifier should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
-        }
-        let nullifier_raw = &nullifier_big.to_str_radix(10);
-        let nullifier = Fr::from_str(nullifier_raw).ok_or("couldn't parse Fr")?;
-        let nullifier_s = Fr::from_str(nullifier_raw).ok_or("couldn't parse Fr")?;
-        // Secret preimage data
-        let secret_big = BigInt::from_str_radix(secret_hex, 16)?;
-        if secret_big >= s_big {
-            return Err("secret should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
-        }
-        let secret_raw = &secret_big.to_str_radix(10);
-        let secret = Fr::from_str(secret_raw).ok_or("couldn't parse Fr")?;
-        let secret_s = Fr::from_str(secret_raw).ok_or("couldn't parse Fr")?;
-        // Root hash
-        let root_big = BigInt::from_str_radix(root_hex, 16)?;
-        if root_big >= s_big {
-            return Err("root should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
-        }
-        let root_raw = &root_big.to_str_radix(10);
-        let root = Fr::from_str(root_raw).ok_or("couldn't parse Fr")?;
-        let root_s = Fr::from_str(root_raw).ok_or("couldn't parse Fr")?;
-        // Proof path
-        let mut proof_p_big: Vec<Option<(bool, pairing::bn256::Fr)>> = vec![];
-        let proof_len = proof_path_hex.len();
-        let depth = proof_len / 32;
-        for i in 0..depth {
-            let (neighbor_i, proof_path_hex) = proof_path_hex.split_at(32);
-            let (side_i, proof_path_sides) = proof_path_sides.split_at(1);
-            let mut side_bool = false;
-            if side_i == "1" {
-                side_bool = true;
-            }
-
-            let p_big = BigInt::from_str_radix(neighbor_i, 16)?;
-            if p_big >= s_big {
-                return Err("root should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
-            }
-            let p_raw = &p_big.to_str_radix(10);
-            let p = Fr::from_str(p_raw).ok_or("couldn't parse Fr")?;
-            let p_s = Fr::from_str(p_raw).ok_or("couldn't parse Fr")?;
-            proof_p_big.push(Some((
-                side_bool,
-                p,
-            )));
-        }
-
-        let proof = create_random_proof(
-            MerkleTreeCircuit {
-                params: j_params,
-                nullifier: Some(nullifier),
-                secret: Some(secret),
-                root: Some(root),
-                proof: vec![],
-            },
-            &de_params,
-            rng
-        )?;
-
-        let mut v = vec![];
-        proof.write(&mut v)?;
-
-        Ok(JsValue::from_serde(&KGProof {
-            proof: hex::encode(&v[..]),
-        })?)
-    }();
-
-    convert_error_to_jsvalue(res)
-}
-
-#[wasm_bindgen(catch)]
-pub fn verify(params: &str, proof: &str, nullifier_hex: &str, root_hex: &str) -> Result<JsValue, JsValue> {
-    let res = || -> Result<JsValue, Box<Error>> {
-        let de_params = Parameters::read(&hex::decode(params)?[..], true)?;
-        let j_params = &JubjubBn256::new();
-        let pvk = prepare_verifying_key::<Bn256>(&de_params.vk);
-
-
-        let s = &format!("{}", Fs::char())[2..];
-        let s_big = BigInt::from_str_radix(s, 16)?;
-        // Nullifier
-        let nullifier_big = BigInt::from_str_radix(nullifier_hex, 16)?;
-        if nullifier_big >= s_big {
-            return Err("x should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
-        }
-        let nullifier_raw = &nullifier_big.to_str_radix(10);
-        let nullifier = Fr::from_str(nullifier_raw).ok_or("couldn't parse Fr")?;
-        let nullifier_s = Fr::from_str(nullifier_raw).ok_or("couldn't parse Fr")?;
-        // Root hash
-        let root_big = BigInt::from_str_radix(root_hex, 16)?;
-        if root_big >= s_big {
-            return Err("x should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
-        }
-        let root_raw = &root_big.to_str_radix(10);
-        let root = Fr::from_str(root_raw).ok_or("couldn't parse Fr")?;
-        let root_s = Fr::from_str(root_raw).ok_or("couldn't parse Fr")?;
-
-
-        let result = verify_proof(
-            &pvk,
-            &Proof::read(&hex::decode(proof)?[..])?,
-            &[
-                nullifier,
-                root
-            ])?;
-
-        Ok(JsValue::from_serde(&KGVerify{
-            result: result
-        })?)
-    }();
-    convert_error_to_jsvalue(res)
-}
-
-fn convert_error_to_jsvalue(res: Result<JsValue, Box<Error>>) -> Result<JsValue, JsValue> {
+pub fn generate_tree(seed_slice: &[u32]) -> Result<JsValue, JsValue> {
+    let res = generate(seed_slice);
     if res.is_ok() {
-        Ok(res.ok().unwrap())
+        Ok(JsValue::from_serde(&res.ok().unwrap()).unwrap())
+    } else {
+        Err(JsValue::from_str(&res.err().unwrap().to_string()))
+    }
+}
+
+#[wasm_bindgen(catch)]
+pub fn prove_tree(
+    seed_slice: &[u32],
+    params: &str,
+    nullifier_hex: &str,
+    secret_hex: &str,
+    root_hex: &str,
+    proof_path_hex: &str,
+    proof_path_sides: &str
+) -> Result<JsValue, JsValue> {
+    let res = prove(seed_slice, params, nullifier_hex, secret_hex, root_hex, proof_path_hex, proof_path_sides);
+    if res.is_ok() {
+        Ok(JsValue::from_serde(&res.ok().unwrap()).unwrap())
+    } else {
+        Err(JsValue::from_str(&res.err().unwrap().to_string()))
+    }
+}
+
+#[wasm_bindgen(catch)]
+pub fn verify_tree(
+    params: &str,
+    proof: &str,
+    nullifier_hex: &str,
+    root_hex: &str
+) -> Result<JsValue, JsValue> {
+    let res = verify(params, proof, nullifier_hex, root_hex);
+    if res.is_ok() {
+        Ok(JsValue::from_serde(&res.ok().unwrap()).unwrap())
     } else {
         Err(JsValue::from_str(&res.err().unwrap().to_string()))
     }
@@ -339,6 +182,7 @@ fn convert_error_to_jsvalue(res: Result<JsValue, Box<Error>>) -> Result<JsValue,
 
 #[cfg(test)]
 mod test {
+    use std::fs;
     use pairing::{bn256::{Bn256, Fr}};
     use sapling_crypto::{
         babyjubjub::{
@@ -356,7 +200,7 @@ mod test {
     };
     use rand::Rand;
 
-    use super::MerkleTreeCircuit;
+    use super::{MerkleTreeCircuit, generate, prove, verify};
     use merkle_tree::{create_leaf_list, create_leaf_from_preimage, build_merkle_tree_with_proof};
     use time::PreciseTime;
 
@@ -392,6 +236,7 @@ mod test {
         println!("num inputs: {}", cs.num_inputs());
     }
 
+    #[test]
     fn test_wasm_fns() {
         let mut cs = TestConstraintSystem::<Bn256>::new();
         let mut seed : [u32; 4] = [0; 4];
@@ -423,5 +268,63 @@ mod test {
         println!("setup generated in {} s", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
         println!("num constraints: {}", cs.num_constraints());
         println!("num inputs: {}", cs.num_inputs());
+    }
+
+    #[test]
+    fn test_generate_params() {
+        let mut seed : [u32; 4] = [0; 4];
+        seed.copy_from_slice(&[1u32, 1u32, 1u32, 1u32]);
+        let rng = &mut XorShiftRng::from_seed(seed);
+        println!("generating setup...");
+        let start = PreciseTime::now();
+        
+        let nullifier = Fr::rand(rng);
+        let secret = Fr::rand(rng);
+        let leaf = *create_leaf_from_preimage(nullifier, secret).hash();
+        println!("{:?}\n{:?}\n{:?}", nullifier, secret, leaf);
+        let mut leaves = vec![leaf];
+        for _ in 0..7 {
+            leaves.push(Fr::rand(rng));
+        }
+        println!("\n{:?}", leaves);
+        let tree_nodes = create_leaf_list(leaves, 3);
+        let (_r, proof) = build_merkle_tree_with_proof(tree_nodes, 3, leaf, vec![]);
+        println!("\nProof\n{:?}", proof);
+        let nullifier_hex = &nullifier.to_hex();
+        let secret_hex = &secret.to_hex();
+        let root_hex = &_r.root.hash().to_hex();
+        let mut proof_path_hex: String = "".to_string();
+        let mut proof_path_sides: String = "".to_string();
+        for inx in 0..proof.len() {
+            match proof[inx] {
+                Some((right_side, pt)) => {
+                    proof_path_hex.push_str(&pt.to_hex());
+                    proof_path_sides.push_str(if right_side { &"1" } else { &"0" });
+                },
+                None => {},
+            }
+            
+        }
+        println!("{:?}\n{:?}\n{:?}\n{:?}\n{:?}", nullifier_hex, secret_hex, root_hex, proof_path_hex, proof_path_sides);
+        let params = generate(&seed).unwrap().params;
+        let ppproof = prove(
+            &seed,
+            &params,
+            nullifier_hex,
+            secret_hex,
+            root_hex,
+            &proof_path_hex,
+            &proof_path_sides,
+        ).unwrap();
+        print!("\nProof proof\n{:?}", ppproof.proof);
+        fs::write("test/test.params", params).unwrap();
+        fs::write("test/test.proof", ppproof.proof).unwrap();
+        let parameters = &String::from_utf8(fs::read("test/test.params").unwrap()).unwrap();
+        let proofameters = &String::from_utf8(fs::read("test/test.proof").unwrap()).unwrap();
+        // let h = &String::from_utf8(fs::read("test/test_tree.h").unwrap()).unwrap();
+        println!("{:?}\n{:?}", parameters, proofameters);
+        let verify = verify(parameters, proofameters, &nullifier_hex, &root_hex).unwrap();
+        
+        println!("Did the circuit work!? {:?}", verify.result);
     }
 }

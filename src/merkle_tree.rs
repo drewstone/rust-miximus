@@ -6,7 +6,30 @@ use sapling_crypto::{
     },
 };
 
-use tree::Tree;
+/// Binary Tree where leaves hold a stand-alone value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Tree {
+    Empty {
+        hash: pairing::bn256::Fr,
+        parent: Option<Box<Tree>>,
+    },
+    Node {
+        hash: pairing::bn256::Fr,
+        left: Box<Tree>,
+        right: Box<Tree>,
+        parent: Option<Box<Tree>>,
+    },
+}
+
+impl Tree {
+    /// Returns a hash from the tree.
+    pub fn hash(&self) -> &pairing::bn256::Fr {
+        match *self {
+            Tree::Empty { ref hash, .. } => hash,
+            Tree::Node { ref hash, .. } => hash,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct MerkleTree {
@@ -195,7 +218,7 @@ mod test {
     use merkle_tree::create_leaf_list;
     use merkle_tree::build_merkle_tree_with_proof;
     use merkle_tree::print_merkle_tree;
-    use tree::Tree;
+    use super::Tree;
     use rand::Rand;
     use super::build_merkle_tree;
     use pairing::{bn256::{Fr}};
