@@ -1,4 +1,4 @@
-extern crate wasm_bindgen;
+
 extern crate sapling_crypto;
 extern crate bellman;
 extern crate pairing;
@@ -7,6 +7,11 @@ extern crate num_bigint;
 extern crate num_traits;
 extern crate rand;
 extern crate time;
+extern crate wasm_bindgen;
+#[macro_use]
+extern crate serde_derive;
+
+use wasm_bindgen::prelude::*;
 
 use bellman::{
     Circuit,
@@ -30,6 +35,7 @@ use pairing::{bn256::{Fr}};
 
 mod tree;
 mod merkle_tree;
+mod wasm_util;
 
 /// This is our demo circuit for proving knowledge of the
 /// preimage of a MiMC hash invocation.
@@ -160,7 +166,6 @@ mod test {
     use rand::Rand;
 
     use super::MerkleTreeCircuit;
-
     use time::PreciseTime;
 
     #[test]

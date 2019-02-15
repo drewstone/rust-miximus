@@ -8,31 +8,40 @@ extern crate num_traits;
 extern crate rand;
 extern crate time;
 
-use time::PreciseTime;
+use wasm_bindgen::prelude::*;
+use MerkleTreeCircuit;
+use num_bigint::BigInt;
+use num_traits::Num;
+use std::error::Error;
+use sapling_crypto::{
+    babyjubjub::{
+        JubjubBn256
+    }
+};
 use bellman::{
-    Circuit,
-    SynthesisError,
-    ConstraintSystem,
     groth16::{
         Proof, Parameters, verify_proof, create_random_proof, prepare_verifying_key, generate_random_parameters
     }
 };
 
 use rand::{XorShiftRng, SeedableRng};
-use ff::{BitIterator, PrimeField};
-use pairing::bn256::Bn256;
+use ff::{PrimeField};
+use pairing::{bn256::{Bn256, Fr}};
 use sapling_crypto::{
     jubjub::{
         fs::Fs,
-        JubjubEngine,
     },
-    circuit::{
-        Assignment,
-        num::{AllocatedNum},
-        pedersen_hash,
-        boolean::{AllocatedBit, Boolean}
-    }
 };
+
+use merkle_tree::{
+    create_leaf_list,
+    build_merkle_tree_with_proof,
+};
+
+#[wasm_bindgen]
+extern "C" {
+    fn alert(s: &str);
+}
 
 #[derive(Serialize)]
 pub struct KGGenerate {
@@ -42,7 +51,10 @@ pub struct KGGenerate {
 #[derive(Serialize)]
 pub struct KGProof {
     pub proof: String,
-    pub h: String
+    // pub nullifier: String,
+    // pub secret: String,
+    // pub leaf: String,
+    // pub path: Vec<String>
 }
 
 #[derive(Serialize)]
@@ -57,12 +69,12 @@ pub fn generate(seed_slice: &[u32]) -> Result<JsValue, JsValue> {
         seed.copy_from_slice(seed_slice);
         let rng = &mut XorShiftRng::from_seed(seed);
 
-        let j_params = &AltJubjubBn256::new();
+        let j_params = &JubjubBn256::new();
         let params = generate_random_parameters::<Bn256, _, _>(
             MerkleTreeCircuit {
                 params: j_params,
                 nullifier: None,
-                xr: None,
+                secret: None,
                 leaf: None,
                 root: None,
                 proof: vec![],
@@ -82,49 +94,41 @@ pub fn generate(seed_slice: &[u32]) -> Result<JsValue, JsValue> {
 }
 
 #[wasm_bindgen(catch)]
-pub fn prove(seed_slice: &[u32], params: &str, nullifier_hex: &str, xr_hex: &str, leaf_hex: &str, root_hex: &str, proof_hex: Vec<&str>) -> Result<JsValue, JsValue> {
+pub fn prove(seed_slice: &[u32], params: &str, nullifier_hex: &str, secret_hex: &str, leaf_hex: &str, root_hex: &str, proof_path_hex: Vec<&str>, proof_path_sides: &[bool]) -> Result<JsValue, JsValue> {
     let res = || -> Result<JsValue, Box<Error>> {
         if params.len() == 0 {
             return Err("Params are empty. Did you generate or load params?".into())
         }
         let de_params = Parameters::<Bn256>::read(&hex::decode(params)?[..], true)?;
+        let j_params = &JubjubBn256::new();
 
         let mut seed : [u32; 4] = [0; 4];
         seed.copy_from_slice(seed_slice);
         let rng = &mut XorShiftRng::from_seed(seed);
-        let params = &AltJubjubBn256::new();
+        let params = &JubjubBn256::new();
 
-        let g = params.generator(FixedGenerators::ProofGenerationKey);
         let s = &format!("{}", Fs::char())[2..];
         let s_big = BigInt::from_str_radix(s, 16)?;
-        // X
-        let x_big = BigInt::from_str_radix(x_hex, 16)?;
-        if x_big >= s_big {
-            return Err("x should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
-        }
-        let x_raw = &x_big.to_str_radix(10);
-        let xs = Fs::from_str(x_raw).ok_or("couldn't parse Fr")?;
-        let x = Fr::from_str(x_raw).ok_or("couldn't parse Fr")?;
         // Nullifier
         let nullifier_big = BigInt::from_str_radix(nullifier_hex, 16)?;
         if nullifier_big >= s_big {
-            return Err("x should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
+            return Err("nullifier should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
         }
         let nullifier_raw = &nullifier_big.to_str_radix(10);
         let nullifier = Fr::from_str(nullifier_raw).ok_or("couldn't parse Fr")?;
         let nullifier_s = Fr::from_str(nullifier_raw).ok_or("couldn't parse Fr")?;
-        // xr - secret data
-        let xr_big = BigInt::from_str_radix(xr_hex, 16)?;
-        if xr_big >= s_big {
-            return Err("x should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
+        // Secret preimage data
+        let secret_big = BigInt::from_str_radix(secret_hex, 16)?;
+        if secret_big >= s_big {
+            return Err("secret should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
         }
-        let xr_raw = &xr_big.to_str_radix(10);
-        let xr = Fr::from_str(xr_raw).ok_or("couldn't parse Fr")?;
-        let xr_s = Fr::from_str(xr_raw).ok_or("couldn't parse Fr")?;
+        let secret_raw = &secret_big.to_str_radix(10);
+        let secret = Fr::from_str(secret_raw).ok_or("couldn't parse Fr")?;
+        let secret_s = Fr::from_str(secret_raw).ok_or("couldn't parse Fr")?;
         // Leaf hash
         let leaf_big = BigInt::from_str_radix(leaf_hex, 16)?;
         if leaf_big >= s_big {
-            return Err("x should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
+            return Err("leaf should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
         }
         let leaf_raw = &leaf_big.to_str_radix(10);
         let leaf = Fr::from_str(leaf_raw).ok_or("couldn't parse Fr")?;
@@ -132,32 +136,37 @@ pub fn prove(seed_slice: &[u32], params: &str, nullifier_hex: &str, xr_hex: &str
         // Root hash
         let root_big = BigInt::from_str_radix(root_hex, 16)?;
         if root_big >= s_big {
-            return Err("x should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
+            return Err("root should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
         }
         let root_raw = &root_big.to_str_radix(10);
         let root = Fr::from_str(root_raw).ok_or("couldn't parse Fr")?;
         let root_s = Fr::from_str(root_raw).ok_or("couldn't parse Fr")?;
-
-        // leaf hash
-        let proof_big = proof_hex.iter().map(|s, p_hex| BigInt::from_str_radix(p_hex, 16)?);
-        for (s, p) in proof_big {
-            if p >= s_big {
-                return Err("p should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
+        // Proof path
+        // let mut proof_path_hx = proof_path_hex;
+        // proof_path_hx.iter().map(|p|  std::str::from_utf8(p));
+        let mut proof_p_big = vec![];
+        for inx in 0..proof_path_hex.len() {
+            let p_big = BigInt::from_str_radix(proof_path_hex[inx], 16)?;
+            if p_big >= s_big {
+                return Err("root should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
             }
+            let p_raw = &p_big.to_str_radix(10);
+            let p = Fr::from_str(p_raw).ok_or("couldn't parse Fr")?;
+            let p_s = Fr::from_str(p_raw).ok_or("couldn't parse Fr")?;
+            proof_p_big.push(Some((
+                proof_path_sides[inx],
+                p,
+            )));
         }
-            
-        let proof_raw = proof_hex.iter().map(|s, p| &proof_big.to_str_radix(10));
-        let proof = proof_raw.iter().map(|s, p| Some(Fr::from_str(p).ok_or("couldn't parse Fr")?));
-        let proof_s = proof_raw.iter().map(|s, p| Some(Fr::from_str(p).ok_or("couldn't parse Fr")?));
 
         let proof = create_random_proof(
             MerkleTreeCircuit {
                 params: j_params,
                 nullifier: Some(nullifier),
-                xr: Some(xr),
+                secret: Some(secret),
                 leaf: Some(leaf),
                 root: Some(root),
-                proof: proof,
+                proof: proof_p_big,
             },
             &de_params,
             rng
@@ -166,12 +175,8 @@ pub fn prove(seed_slice: &[u32], params: &str, nullifier_hex: &str, xr_hex: &str
         let mut v = vec![];
         proof.write(&mut v)?;
 
-        let mut v2 = vec![];
-        h.write(&mut v2)?;
-
         Ok(JsValue::from_serde(&KGProof {
             proof: hex::encode(&v[..]),
-            // h: hex::encode(&v2[..])
         })?)
     }();
 
@@ -179,11 +184,12 @@ pub fn prove(seed_slice: &[u32], params: &str, nullifier_hex: &str, xr_hex: &str
 }
 
 #[wasm_bindgen(catch)]
-pub fn verify(params: &str, proof: &str, nullifier_hex: &str, leaf_hex: &str, root_hex: &str) -> Result<JsValue, JsValue> {
+pub fn verify(params: &str, proof: &str, nullifier_hex: &str, root_hex: &str) -> Result<JsValue, JsValue> {
     let res = || -> Result<JsValue, Box<Error>> {
-        let j_params = &JubjubBn256::new();
         let de_params = Parameters::read(&hex::decode(params)?[..], true)?;
+        let j_params = &JubjubBn256::new();
         let pvk = prepare_verifying_key::<Bn256>(&de_params.vk);
+
 
         let s = &format!("{}", Fs::char())[2..];
         let s_big = BigInt::from_str_radix(s, 16)?;

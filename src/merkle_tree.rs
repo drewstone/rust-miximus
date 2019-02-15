@@ -82,18 +82,15 @@ pub fn build_merkle_tree_with_proof(
     mut target_node: pairing::bn256::Fr,
     mut curr_list: Vec<Option<(bool, pairing::bn256::Fr)>>
 ) -> (MerkleTree, Vec<Option<(bool, pairing::bn256::Fr)>>) {
-    println!("{:?}", depth);
     if nodes.len() == 2 {
         let left = nodes.remove(0);
         let right = nodes.remove(0);
-        println!("({:?}, {:?}, {:?})", left, right, target_node);
         if target_node == *left.hash() {
             curr_list.push(Some((true, *right.hash())));
         } else {
             curr_list.push(Some((false, *left.hash())));
         }
 
-        println!("{:?}", curr_list);
         return (
             MerkleTree { root: *hash_leaf_pair(depth, *left, *right) },
             curr_list,
@@ -108,13 +105,10 @@ pub fn build_merkle_tree_with_proof(
     }
 
     let mut new_nodes: Vec<Box<Tree>> = vec![];
-    println!("{:?}", nodes.len());
     for i in 0..nodes.len() {
-        println!("Round {:?}", i);
         if i % 2 != 0 { continue }
         let left = nodes.remove(0);
         let right = nodes.remove(0);
-        println!("{:?}, {:?}, {:?}, {:?}", *left.hash(), *right.hash(), target_node, curr_list);
         let mut temp_bool = false;
         if target_node == *left.hash() {
             curr_list.push(Some((true, *right.hash())));
@@ -131,7 +125,6 @@ pub fn build_merkle_tree_with_proof(
         if temp_bool {
             target_node = *cur.hash();
         }
-        println!("{:?}\n", target_node);
         new_nodes.push(cur);
     }
 
@@ -151,26 +144,17 @@ fn hash_leaf_pair(index: usize, lhs: Tree, rhs: Tree) -> Box<Tree> {
            .chain(rhs_bool.clone().into_iter().take(Fr::NUM_BITS as usize)),
         params
     ).into_xy().0;
-    println!("HASH_LEAF_PAIR {:?}, {:?}, {:?}, {:?}", *lhs.hash(), *rhs.hash(), hash, index);
-    println!("\nBITS {:?}, {:?}, {:?}, {:?}\n", lhs_bool, rhs_bool, hash, index);
-
-    let parent_node = Tree::Node {
+    return Box::new(Tree::Node {
         hash: hash,
         left: Box::new(lhs),
         right: Box::new(rhs),
         parent: None,
-    };
-    return Box::new(parent_node);
+    });
 }
 
 fn compute_root_from_proof(leaf: pairing::bn256::Fr, path: Vec<Option<(bool, pairing::bn256::Fr)>>) -> pairing::bn256::Fr {
     let mut hash = leaf;
-    println!("{:?}", hash);
-    for item in path.clone() {
-        println!("{:?}", item.unwrap());
-    }
     for i in 0..path.len() {
-        println!("Compute round {:?}, {:?}", i, hash);
         match path[i] {
             Some((right_side, pt)) => {
                 if right_side {
@@ -186,7 +170,6 @@ fn compute_root_from_proof(leaf: pairing::bn256::Fr, path: Vec<Option<(bool, pai
                         Tree::Empty { hash: hash, parent: None })
                     .hash();
                 }
-                println!("Path {:?}, {:?}, {:?}", right_side, pt, hash);
             },
             None => {},
         }
@@ -239,7 +222,6 @@ mod test {
         leaves.push(target_leaf);
         println!("\nleaves pushed in {} s\n\n", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
         let tree_nodes = create_leaf_list(leaves, 3);
-        println!("{:?}", tree_nodes.len());
         println!("\nleaf list generated in {} s\n\n", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
         let (_r, proof) = build_merkle_tree_with_proof(tree_nodes, 3, target_leaf, vec![]);
         println!("\ntree proof generated in {} s\n\n", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
