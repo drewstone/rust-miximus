@@ -46,7 +46,6 @@ pub fn generate(seed_slice: &[u32]) -> Result<KGGenerate, Box<Error>> {
             params: j_params,
             nullifier: None,
             secret: None,
-            root: None,
             proof: vec![],
         },
         rng,
@@ -129,20 +128,17 @@ pub fn prove(
         let p_raw = &p_big.to_str_radix(10);
         let p = Fr::from_str(p_raw).ok_or("couldn't parse Fr")?;
         let p_s = Fr::from_str(p_raw).ok_or("couldn't parse Fr")?;
-        println!("\n{:?}\n{:?}\n", proof_path_hex, proof_path_sides);
-        println!("{:?}, {:?}", side_bool, p);
         proof_p_big.push(Some((
             side_bool,
             p,
         )));
     }
-    println!("\n{:?}\n", proof_p_big);
+    println!("Proof in ZK_UTIL\n{:?}\n", proof_p_big);
     let proof = create_random_proof(
         MerkleTreeCircuit {
             params: j_params,
             nullifier: Some(nullifier),
             secret: Some(secret),
-            root: Some(root),
             proof: vec![],
         },
         &de_params,
