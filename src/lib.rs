@@ -69,11 +69,13 @@ impl<'a, E: JubjubEngine> Circuit<E> for MerkleTreeCircuit<'a, E> {
             })
         )?;
         // construct preimage using [nullifier_bits|secret_bits] concatenation
-        let nullifier_bits = nullifier.into_bits_le_strict(cs.namespace(|| "nullifier bits")).unwrap().into_iter().take(Fr::NUM_BITS as usize);
-        let secret_bits = secret.into_bits_le_strict(cs.namespace(|| "secret bits")).unwrap().into_iter().take(Fr::NUM_BITS as usize);
         let mut preimage = vec![];
-        preimage.extend(nullifier_bits);
-        preimage.extend(secret_bits);
+        preimage.extend(nullifier.into_bits_le_strict(cs.namespace(|| "nullifier bits"))?
+            .into_iter()
+            .take(Fr::NUM_BITS as usize));
+        preimage.extend(secret.into_bits_le_strict(cs.namespace(|| "secret bits"))?
+            .into_iter()
+            .take(Fr::NUM_BITS as usize));
         // compute leaf hash using pedersen hash of preimage
         let mut hash = baby_pedersen_hash::pedersen_hash(
             cs.namespace(|| "computation of leaf pedersen hash"),
@@ -96,9 +98,10 @@ impl<'a, E: JubjubEngine> Circuit<E> for MerkleTreeCircuit<'a, E> {
                     &hash,
                     &right_side
                 )?;
+                // build preimage of merkle hash as concatenation of left and right nodes
                 let mut preimage = vec![];
-                preimage.extend(xl.into_bits_le(cs.namespace(|| format!("xl into bits {}", i)))?);
-                preimage.extend(xr.into_bits_le(cs.namespace(|| format!("xr into bits {}", i)))?);
+                preimage.extend(xl.into_bits_le_strict(cs.namespace(|| format!("xl into bits {}", i)))?);
+                preimage.extend(xr.into_bits_le_strict(cs.namespace(|| format!("xr into bits {}", i)))?);
                 // Compute the new subtree value
                 let personalization = baby_pedersen_hash::Personalization::MerkleTree(i as usize);
                 hash = baby_pedersen_hash::pedersen_hash(
@@ -109,9 +112,8 @@ impl<'a, E: JubjubEngine> Circuit<E> for MerkleTreeCircuit<'a, E> {
                 )?.get_x().clone(); // Injective encoding
             }
         }
-
-        println!("THE ROOT HASH {:?}", hash.get_value());
         hash.inputize(cs)?;
+        println!("THE ROOT HASH {:?}", hash.get_value());
         Ok(())
     }
 }
@@ -172,7 +174,7 @@ mod test {
             JubjubBn256,
         }
     };
-    use rand::{XorShiftRng, SeedableRng};
+    use rand::{ChaChaRng, SeedableRng};
 
     use sapling_crypto::circuit::{
         test::TestConstraintSystem
@@ -189,9 +191,8 @@ mod test {
     #[test]
     fn test_merkle_circuit() {
         let mut cs = TestConstraintSystem::<Bn256>::new();
-        let mut seed : [u32; 4] = [0; 4];
-        seed.copy_from_slice(&[1u32, 1u32, 1u32, 1u32]);
-        let rng = &mut XorShiftRng::from_seed(seed);
+        let seed_slice = &[1u32, 1u32, 1u32, 1u32];
+        let rng = &mut ChaChaRng::from_seed(seed_slice);
         println!("generating setup...");
         let start = PreciseTime::now();
         
@@ -218,44 +219,10 @@ mod test {
     }
 
     #[test]
-    fn test_wasm_fns() {
-        let mut cs = TestConstraintSystem::<Bn256>::new();
-        let mut seed : [u32; 4] = [0; 4];
-        seed.copy_from_slice(&[1u32, 1u32, 1u32, 1u32]);
-        let rng = &mut XorShiftRng::from_seed(seed);
-        println!("generating setup...");
-        let start = PreciseTime::now();
-        
-        let nullifier = Fr::rand(rng);
-        let secret = Fr::rand(rng);
-        let leaf = create_leaf_from_preimage(nullifier, secret);
-
-        let mut leaves = vec![*leaf.hash()];
-        for _ in 0..7 {
-            leaves.push(Fr::rand(rng));
-        }
-        let tree_nodes = create_leaf_list(leaves, 3);
-        let (_r, proof_vec) = build_merkle_tree_with_proof(tree_nodes, 3, 3, *leaf.hash(), vec![]);
-
-        let j_params = &JubjubBn256::new();
-        let m_circuit = MerkleTreeCircuit {
-            params: j_params,
-            nullifier: Some(nullifier),
-            secret: Some(secret),
-            proof: proof_vec,
-        };
-        m_circuit.synthesize(&mut cs).unwrap();
-        println!("setup generated in {} s", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
-        println!("num constraints: {}", cs.num_constraints());
-        println!("num inputs: {}", cs.num_inputs());
-    }
-
-    #[test]
     fn test_generate_params() {
         // let mut cs = TestConstraintSystem::<Bn256>::new();
-        let mut seed : [u32; 4] = [0; 4];
-        seed.copy_from_slice(&[1u32, 1u32, 1u32, 1u32]);
-        let rng = &mut XorShiftRng::from_seed(seed);
+        let seed_slice = &[1u32, 1u32, 1u32, 1u32];
+        let rng = &mut ChaChaRng::from_seed(seed_slice);
         println!("generating setup...");        
         let nullifier = Fr::rand(rng);
         let secret = Fr::rand(rng);
@@ -264,7 +231,6 @@ mod test {
         for _ in 0..7 {
             leaves.push(Fr::rand(rng));
         }
-        println!("\n{:?}", leaves);
         let tree_nodes = create_leaf_list(leaves, 3);
         let (_r, proof) = build_merkle_tree_with_proof(tree_nodes, 3, 3, leaf, vec![]);
         println!("THE ROOT HASH IN TEST{:?}", _r.root.hash());
@@ -291,9 +257,9 @@ mod test {
                 None => {},
             }
         }
-        let params = generate(&seed).unwrap().params;
+        let params = generate(seed_slice).unwrap().params;
         let proof_hex = prove(
-            &seed,
+            seed_slice,
             &params,
             nullifier_hex,
             secret_hex,
@@ -317,10 +283,8 @@ mod test {
 
     #[test]
     fn test_proof_creation() {
-        let mut seed : [u32; 4] = [0; 4];
-        seed.copy_from_slice(&[1u32, 1u32, 1u32, 1u32]);
         let start = PreciseTime::now();    
-        let rng = &mut XorShiftRng::from_seed(seed);
+        let rng = &mut ChaChaRng::from_seed(&[1u32, 1u32, 1u32, 1u32]);
         println!("\nsetup generated in {} s\n\n", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
 
         let target_leaf = Fr::rand(rng);
@@ -340,10 +304,8 @@ mod test {
 
     #[test]
     fn test_nullifier_proof() {
-        let mut seed : [u32; 4] = [0; 4];
-        seed.copy_from_slice(&[1u32, 1u32, 1u32, 1u32]);
         let start = PreciseTime::now();    
-        let rng = &mut XorShiftRng::from_seed(seed);
+        let rng = &mut ChaChaRng::from_seed(&[1u32, 1u32, 1u32, 1u32]);
         println!("\nsetup generated in {} s\n\n", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
 
         let nullifier = Fr::rand(rng);
