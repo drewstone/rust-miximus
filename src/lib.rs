@@ -83,41 +83,35 @@ impl<'a, E: JubjubEngine> Circuit<E> for MerkleTreeCircuit<'a, E> {
         )?.get_x().clone();
         // reconstruct merkle root hash using the private merkle path
         for i in 0..self.proof.len() {
-			match self.proof[i] {
-                Some((ref side, ref element)) => {
-                    let elt = AllocatedNum::alloc(cs.namespace(|| format!("elt {}", i)), || Ok(*element))?;
-                    let right_side = Boolean::from(AllocatedBit::alloc(
-                        cs.namespace(|| format!("position bit {}", i)),
-                        Some(*side)).unwrap()
-                    );
-                    println!("\nElement is on right side{:?}\nElement\n{:?}", right_side.get_value(), element);
-                    // Swap the two if the current subtree is on the right
-                    let (xl, xr) = AllocatedNum::conditionally_reverse(
-                        cs.namespace(|| format!("conditional reversal of preimage {}", i)),
-                        &elt,
-                        &hash,
-                        &right_side
-                    )?;
-                    println!("Reversed pair\n{:?}\n{:?}", xl.get_value(), xr.get_value());
-                    let mut preimage = vec![];
-                    preimage.extend(xl.into_bits_le(cs.namespace(|| format!("xl into bits {}", i)))?);
-                    preimage.extend(xr.into_bits_le(cs.namespace(|| format!("xr into bits {}", i)))?);
-                    // Compute the new subtree value
-                    let personalization = baby_pedersen_hash::Personalization::MerkleTree(i as usize);
-                    println!("CIRCUIT PERSONALIZATION: {:?}", i);;
-                    hash = baby_pedersen_hash::pedersen_hash(
-                        cs.namespace(|| format!("computation of pedersen hash {}", i)),
-                        personalization,
-                        &preimage,
-                        self.params
-                    )?.get_x().clone(); // Injective encoding
-                    println!("IN CIRCUIT {:?}", hash.get_value().unwrap().to_string());
-                },
-                None => (),
+			if let Some((ref side, ref element)) = self.proof[i] {
+                let elt = AllocatedNum::alloc(cs.namespace(|| format!("elt {}", i)), || Ok(*element))?;
+                let right_side = Boolean::from(AllocatedBit::alloc(
+                    cs.namespace(|| format!("position bit {}", i)),
+                    Some(*side)).unwrap()
+                );
+                // Swap the two if the current subtree is on the right
+                let (xl, xr) = AllocatedNum::conditionally_reverse(
+                    cs.namespace(|| format!("conditional reversal of preimage {}", i)),
+                    &elt,
+                    &hash,
+                    &right_side
+                )?;
+                let mut preimage = vec![];
+                preimage.extend(xl.into_bits_le(cs.namespace(|| format!("xl into bits {}", i)))?);
+                preimage.extend(xr.into_bits_le(cs.namespace(|| format!("xr into bits {}", i)))?);
+                // Compute the new subtree value
+                let personalization = baby_pedersen_hash::Personalization::MerkleTree(i as usize);
+                hash = baby_pedersen_hash::pedersen_hash(
+                    cs.namespace(|| format!("computation of pedersen hash {}", i)),
+                    personalization,
+                    &preimage,
+                    self.params
+                )?.get_x().clone(); // Injective encoding
             }
         }
 
-        hash.inputize(cs.namespace(|| "merkle root hash"))?;
+        println!("THE ROOT HASH {:?}", hash.get_value());
+        hash.inputize(cs)?;
         Ok(())
     }
 }
@@ -143,11 +137,10 @@ pub fn prove_tree(
     params: &str,
     nullifier_hex: &str,
     secret_hex: &str,
-    root_hex: &str,
     proof_path_hex: &str,
     proof_path_sides: &str
 ) -> Result<JsValue, JsValue> {
-    let res = prove(seed_slice, params, nullifier_hex, secret_hex, root_hex, proof_path_hex, proof_path_sides);
+    let res = prove(seed_slice, params, nullifier_hex, secret_hex, proof_path_hex, proof_path_sides);
     if res.is_ok() {
         Ok(JsValue::from_serde(&res.ok().unwrap()).unwrap())
     } else {
@@ -238,7 +231,7 @@ mod test {
         let leaf = create_leaf_from_preimage(nullifier, secret);
 
         let mut leaves = vec![*leaf.hash()];
-        for i in 0..7 {
+        for _ in 0..7 {
             leaves.push(Fr::rand(rng));
         }
         let tree_nodes = create_leaf_list(leaves, 3);
@@ -259,17 +252,14 @@ mod test {
 
     #[test]
     fn test_generate_params() {
-        let mut cs = TestConstraintSystem::<Bn256>::new();
+        // let mut cs = TestConstraintSystem::<Bn256>::new();
         let mut seed : [u32; 4] = [0; 4];
         seed.copy_from_slice(&[1u32, 1u32, 1u32, 1u32]);
         let rng = &mut XorShiftRng::from_seed(seed);
-        println!("generating setup...");
-        let start = PreciseTime::now();
-        
+        println!("generating setup...");        
         let nullifier = Fr::rand(rng);
         let secret = Fr::rand(rng);
         let leaf = *create_leaf_from_preimage(nullifier, secret).hash();
-        println!("Nullifer\n{:?}\nSecret\n{:?}Leaf\n{:?}", nullifier, secret, leaf);
         let mut leaves = vec![leaf];
         for _ in 0..7 {
             leaves.push(Fr::rand(rng));
@@ -277,17 +267,16 @@ mod test {
         println!("\n{:?}", leaves);
         let tree_nodes = create_leaf_list(leaves, 3);
         let (_r, proof) = build_merkle_tree_with_proof(tree_nodes, 3, 3, leaf, vec![]);
+        println!("THE ROOT HASH IN TEST{:?}", _r.root.hash());
+        // let j_params = &JubjubBn256::new();
+        // let m_circuit = MerkleTreeCircuit {
+        //     params: j_params,
+        //     nullifier: Some(nullifier),
+        //     secret: Some(secret),
+        //     proof: proof.clone(),
+        // };
+        // m_circuit.synthesize(&mut cs).unwrap();
 
-        let j_params = &JubjubBn256::new();
-        let m_circuit = MerkleTreeCircuit {
-            params: j_params,
-            nullifier: Some(nullifier),
-            secret: Some(secret),
-            proof: proof.clone(),
-        };
-        m_circuit.synthesize(&mut cs).unwrap();
-
-        println!("\nProof\n{:?}", proof);
         let nullifier_hex = &nullifier.to_hex();
         let secret_hex = &secret.to_hex();
         let root_hex = &_r.root.hash().to_hex();
@@ -302,26 +291,24 @@ mod test {
                 None => {},
             }
         }
-        println!("{:?}\n{:?}\n{:?}\n{:?}\n{:?}", nullifier_hex, secret_hex, root_hex, proof_path_hex, proof_path_sides);
         let params = generate(&seed).unwrap().params;
-        let ppproof = prove(
+        let proof_hex = prove(
             &seed,
             &params,
             nullifier_hex,
             secret_hex,
-            root_hex,
             &proof_path_hex,
             &proof_path_sides,
         ).unwrap();
-        print!("\nProof proof\n{:?}\n", ppproof.proof);
+
         fs::write("test/test.params", params).unwrap();
-        fs::write("test/test.proof", ppproof.proof).unwrap();
+        fs::write("test/test.proof", proof_hex.proof).unwrap();
         let parameters = &String::from_utf8(fs::read("test/test.params").unwrap()).unwrap();
-        let proofameters = &String::from_utf8(fs::read("test/test.proof").unwrap()).unwrap();
+        let the_proof = &String::from_utf8(fs::read("test/test.proof").unwrap()).unwrap();
         
         // let h = &String::from_utf8(fs::read("test/test_tree.h").unwrap()).unwrap();
-        let verify = verify(parameters, proofameters, &nullifier_hex, &root_hex).unwrap();
-        
+        let verify = verify(parameters, the_proof, &nullifier_hex, &root_hex).unwrap();
+        // println!("{:?}", cs.which_is_unsatisfied());
         println!("Did the circuit work!? {:?}", verify.result);
     }
 

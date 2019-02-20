@@ -71,33 +71,33 @@ pub fn create_leaf_list(mut nodes: Vec<pairing::bn256::Fr>, depth: usize) -> Vec
     return tree_nodes;
 }
 
-pub fn build_merkle_tree(mut nodes: Vec<Box<Tree>>, depth: usize) -> MerkleTree {
-    if nodes.len() == 2 {
-        let left = nodes.remove(0);
-        let right = nodes.remove(0);
-        return MerkleTree {
-            root: *hash_leaf_pair(depth, *left, *right),
-        };
-    }
+// pub fn build_merkle_tree(mut nodes: Vec<Box<Tree>>, depth: usize) -> MerkleTree {
+//     if nodes.len() == 2 {
+//         let left = nodes.remove(0);
+//         let right = nodes.remove(0);
+//         return MerkleTree {
+//             root: *hash_leaf_pair(depth, *left, *right),
+//         };
+//     }
 
-    for _ in 0..((2 << (depth - 1)) - nodes.len()) {
-        nodes.push(Box::new(Tree::Empty {
-            hash: <pairing::bn256::Fr>::zero(),
-            parent: None
-        }));
-    }
+//     for _ in 0..((2 << (depth - 1)) - nodes.len()) {
+//         nodes.push(Box::new(Tree::Empty {
+//             hash: <pairing::bn256::Fr>::zero(),
+//             parent: None
+//         }));
+//     }
 
-    let mut next_nodes: Vec<Box<Tree>> = vec![];
-    for i in 0..nodes.len() {
-        if i % 2 != 0 { continue }
-        let left = nodes.remove(0);
-        let right = nodes.remove(0);
-        let cur = hash_leaf_pair(depth, *left, *right);
-        next_nodes.push(cur);
-    }
+//     let mut next_nodes: Vec<Box<Tree>> = vec![];
+//     for i in 0..nodes.len() {
+//         if i % 2 != 0 { continue }
+//         let left = nodes.remove(0);
+//         let right = nodes.remove(0);
+//         let cur = hash_leaf_pair(depth, *left, *right);
+//         next_nodes.push(cur);
+//     }
 
-    return build_merkle_tree(next_nodes, depth - 1);
-}
+//     return build_merkle_tree(next_nodes, depth - 1);
+// }
 
 #[allow(dead_code)]
 pub fn build_merkle_tree_with_proof(
@@ -153,7 +153,6 @@ pub fn hash_nodes_rec(
         if temp_bool {
             target_node = *cur.hash();
         }
-        println!("{}", depth.to_string());
         if depth == 1 {
             curr_list.append(&mut val);
             return (
@@ -307,13 +306,13 @@ pub fn compute_root_from_proof(leaf: pairing::bn256::Fr, path: Vec<Option<(bool,
     return hash;
 }
 
-pub fn print_merkle_tree(tree: &Tree) {
-    match tree {
-        Tree::Node { hash: _, ref left, ref right, parent: _ } => {
-            print_merkle_tree(left);
-            print_merkle_tree(right);
-            println!("{:?}, {:?}, {:?}", left.hash(), right.hash(), tree.hash());
-        },
-        _ => { return },
-    }
-}
+// pub fn print_merkle_tree(tree: &Tree) {
+//     match tree {
+//         Tree::Node { hash: _, ref left, ref right, parent: _ } => {
+//             print_merkle_tree(left);
+//             print_merkle_tree(right);
+//             println!("{:?}, {:?}, {:?}", left.hash(), right.hash(), tree.hash());
+//         },
+//         _ => { return },
+//     }
+// }

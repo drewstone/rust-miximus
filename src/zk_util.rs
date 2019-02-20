@@ -8,7 +8,7 @@ use std::error::Error;
 use ff::{PrimeField};
 use sapling_crypto::{
     babyjubjub::{
-        fs::Fs,
+        // fs::Fs,
         JubjubBn256,
     },
 };
@@ -65,7 +65,6 @@ pub fn prove(
         params: &str,
         nullifier_hex: &str,
         secret_hex: &str,
-        root_hex: &str,
         mut proof_path_hex: &str,
         mut proof_path_sides: &str,
 ) -> Result<KGProof, Box<Error>> {
@@ -78,11 +77,10 @@ pub fn prove(
     let mut seed : [u32; 4] = [0; 4];
     seed.copy_from_slice(seed_slice);
     let rng = &mut XorShiftRng::from_seed(seed);
-    let params = &JubjubBn256::new();
+    // let params = &JubjubBn256::new();
 
-    let s = &format!("{}", Fs::char())[2..];
-    let s_big = BigInt::from_str_radix(s, 16)?;
-    println!("{:?}, {:?}", s, Fs::char());
+    // let s = &format!("{}", Fs::char())[2..];
+    // let s_big = BigInt::from_str_radix(s, 16)?;
     // Nullifier
     let nullifier_big = BigInt::from_str_radix(nullifier_hex, 16)?;
     // if nullifier_big >= s_big {
@@ -90,7 +88,6 @@ pub fn prove(
     // }
     let nullifier_raw = &nullifier_big.to_str_radix(10);
     let nullifier = Fr::from_str(nullifier_raw).ok_or("couldn't parse Fr")?;
-    let nullifier_s = Fr::from_str(nullifier_raw).ok_or("couldn't parse Fr")?;
     // Secret preimage data
     let secret_big = BigInt::from_str_radix(secret_hex, 16)?;
     // if secret_big >= s_big {
@@ -98,20 +95,18 @@ pub fn prove(
     // }
     let secret_raw = &secret_big.to_str_radix(10);
     let secret = Fr::from_str(secret_raw).ok_or("couldn't parse Fr")?;
-    let secret_s = Fr::from_str(secret_raw).ok_or("couldn't parse Fr")?;
     // Root hash
-    let root_big = BigInt::from_str_radix(root_hex, 16)?;
+    // let root_big = BigInt::from_str_radix(root_hex, 16)?;
     // if root_big >= s_big {
     //     return Err("root should be less than 60c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1".into())
     // }
-    let root_raw = &root_big.to_str_radix(10);
-    let root = Fr::from_str(root_raw).ok_or("couldn't parse Fr")?;
-    let root_s = Fr::from_str(root_raw).ok_or("couldn't parse Fr")?;
+    // let root_raw = &root_big.to_str_radix(10);
+    // let root = Fr::from_str(root_raw).ok_or("couldn't parse Fr")?;
+    // let root_s = Fr::from_str(root_raw).ok_or("couldn't parse Fr")?;
     // Proof path
-    println!("{:?}\n{:?}\n{:?}", nullifier, secret, root);
     let mut proof_p_big: Vec<Option<(bool, pairing::bn256::Fr)>> = vec![];
     let proof_len = proof_path_sides.len();
-    for i in 0..proof_len {
+    for _ in 0..proof_len {
         let (neighbor_i, pfh) = proof_path_hex.split_at(64);
         let (side_i, pfs) = proof_path_sides.split_at(1);
         proof_path_hex = pfh;
@@ -127,23 +122,23 @@ pub fn prove(
         // }
         let p_raw = &p_big.to_str_radix(10);
         let p = Fr::from_str(p_raw).ok_or("couldn't parse Fr")?;
-        let p_s = Fr::from_str(p_raw).ok_or("couldn't parse Fr")?;
+        // let p_s = Fr::from_str(p_raw).ok_or("couldn't parse Fr")?;
         proof_p_big.push(Some((
             side_bool,
             p,
         )));
     }
-    println!("Proof in ZK_UTIL\n{:?}\n", proof_p_big);
+
     let proof = create_random_proof(
         MerkleTreeCircuit {
             params: j_params,
             nullifier: Some(nullifier),
             secret: Some(secret),
-            proof: vec![],
+            proof: proof_p_big,
         },
         &de_params,
         rng
-    )?;
+    ).unwrap();
 
     let mut v = vec![];
     proof.write(&mut v)?;
@@ -154,11 +149,11 @@ pub fn prove(
 
 pub fn verify(params: &str, proof: &str, nullifier_hex: &str, root_hex: &str) -> Result<KGVerify, Box<Error>> {
     let de_params = Parameters::read(&hex::decode(params)?[..], true)?;
-    let j_params = &JubjubBn256::new();
+    // let j_params = &JubjubBn256::new();
     let pvk = prepare_verifying_key::<Bn256>(&de_params.vk);
 
-    let s = &format!("{}", Fs::char())[2..];
-    let s_big = BigInt::from_str_radix(s, 16)?;
+    // let s = &format!("{}", Fs::char())[2..];
+    // let s_big = BigInt::from_str_radix(s, 16)?;
     // Nullifier
     let nullifier_big = BigInt::from_str_radix(nullifier_hex, 16)?;
     // if nullifier_big >= s_big {
@@ -166,7 +161,7 @@ pub fn verify(params: &str, proof: &str, nullifier_hex: &str, root_hex: &str) ->
     // }
     let nullifier_raw = &nullifier_big.to_str_radix(10);
     let nullifier = Fr::from_str(nullifier_raw).ok_or("couldn't parse Fr")?;
-    let nullifier_s = Fr::from_str(nullifier_raw).ok_or("couldn't parse Fr")?;
+    // let nullifier_s = Fr::from_str(nullifier_raw).ok_or("couldn't parse Fr")?;
     // Root hash
     let root_big = BigInt::from_str_radix(root_hex, 16)?;
     // if root_big >= s_big {
@@ -174,7 +169,7 @@ pub fn verify(params: &str, proof: &str, nullifier_hex: &str, root_hex: &str) ->
     // }
     let root_raw = &root_big.to_str_radix(10);
     let root = Fr::from_str(root_raw).ok_or("couldn't parse Fr")?;
-    let root_s = Fr::from_str(root_raw).ok_or("couldn't parse Fr")?;
+    // let root_s = Fr::from_str(root_raw).ok_or("couldn't parse Fr")?;
 
 
     let result = verify_proof(
