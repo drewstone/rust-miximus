@@ -124,8 +124,8 @@ extern "C" {
 }
 
 #[wasm_bindgen(catch)]
-pub fn generate_tree(seed_slice: &[u32]) -> Result<JsValue, JsValue> {
-    let res = generate(seed_slice);
+pub fn generate_tree(seed_slice: &[u32], depth: u32) -> Result<JsValue, JsValue> {
+    let res = generate(seed_slice, depth);
     if res.is_ok() {
         Ok(JsValue::from_serde(&res.ok().unwrap()).unwrap())
     } else {
@@ -257,7 +257,7 @@ mod test {
                 None => {},
             }
         }
-        let params = generate(seed_slice).unwrap().params;
+        let params = generate(seed_slice, proof.len() as u32).unwrap().params;
         let proof_hex = prove(
             seed_slice,
             &params,

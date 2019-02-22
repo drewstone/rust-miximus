@@ -5,7 +5,7 @@ use num_traits::Num;
 use std::error::Error;
 
 
-use ff::{PrimeField};
+use ff::{PrimeField, Field};
 use sapling_crypto::{
     babyjubjub::{
         JubjubBn256,
@@ -34,15 +34,23 @@ pub struct KGVerify {
     pub result: bool
 }
 
-pub fn generate(seed_slice: &[u32]) -> Result<KGGenerate, Box<Error>> {
+pub fn generate(seed_slice: &[u32], depth: u32) -> Result<KGGenerate, Box<Error>> {
     let rng = &mut ChaChaRng::from_seed(seed_slice);
     let j_params = &JubjubBn256::new();
+    let mut proof_elts = vec![];
+
+    for _ in 0..depth {
+        proof_elts.push(Some((
+            true,
+            pairing::bn256::Fr::zero(),
+        )));
+    }
     let params = generate_random_parameters::<Bn256, _, _>(
         MerkleTreeCircuit {
             params: j_params,
             nullifier: None,
             secret: None,
-            proof: vec![],
+            proof: proof_elts,
         },
         rng,
     )?;
