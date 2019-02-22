@@ -16,4 +16,4 @@ The public inputs of the zkSNARK are:
 1. The nullifier _N_.
 2. The merkle root _T_.
 
-The zkSNARK ensures in zero-knowledge that _HASH(N|S)_ is a valid leaf by using it to reconstruct _T_ using an authentication path _PATH_.
+The zkSNARK ensures in zero-knowledge that _HASH(N|S)_ is a valid leaf by using it to reconstruct _T_ using an authentication path _PATH_. Since the nullifier is a public input, this can be recorded in a persistent manner to ensure users can't prove knowledge of deposits more than once as each nullifier is only good for a single leaf. A simple boolean check on a blockchain runtime prevents double spending from occurring.
