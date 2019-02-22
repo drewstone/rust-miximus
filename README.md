@@ -1,6 +1,6 @@
 # rust-miximus
 
-This repo contains a MVP, WASM compilable zkSNARK of barrywhitehat's original [Miximus](https://github.com/barryWhiteHat/miximus). Details of the construction are as follows.
+This repo contains a MVP, WASM compatible zkSNARK of barrywhitehat's original [Miximus](https://github.com/barryWhiteHat/miximus). Details of the construction are as follows.
 
 ## Miximus
 Miximus is an anonymous cryptocurrency mixer using zkSNARKs. A full implementation allows users to deposit coins into a smart contract as in Ethereum or blockchain runtime as in Substrate, create a leaf in a merkle tree with some secret data, and then withdraw these coins anonymously by providing a zkSNARK over data in the merkle tree. The proof allows a valid depositor to prove they deposited coins into the merkle tree without enforcing that the withdrawer show which leaf they are proving over.
