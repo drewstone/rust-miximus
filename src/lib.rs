@@ -1,3 +1,4 @@
+#![feature(custom_attribute)]
 extern crate sapling_crypto;
 extern crate bellman;
 extern crate pairing;
@@ -10,6 +11,7 @@ extern crate wasm_bindgen;
 
 #[macro_use]
 extern crate serde_derive;
+
 
 use wasm_bindgen::prelude::*;
 
