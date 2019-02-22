@@ -15,12 +15,6 @@ use sapling_crypto::{
 use pairing::{bn256::{Bn256, Fr}};
 use MerkleTreeCircuit;
 
-
-#[wasm_bindgen]
-extern "C" {
-    fn alert(s: &str);
-}
-
 #[derive(Serialize)]
 pub struct KGGenerate {
     pub params: String
@@ -40,7 +34,6 @@ pub struct KGVerify {
     pub result: bool
 }
 
-#[wasm_bindgen(catch)]
 pub fn generate(seed_slice: &[u32], depth: u32) -> Result<KGGenerate, Box<Error>> {
     let rng = &mut ChaChaRng::from_seed(seed_slice);
     let j_params = &JubjubBn256::new();
@@ -71,7 +64,6 @@ pub fn generate(seed_slice: &[u32], depth: u32) -> Result<KGGenerate, Box<Error>
     })
 }
 
-#[wasm_bindgen(catch)]
 pub fn prove(
         seed_slice: &[u32],
         params: &str,
@@ -129,7 +121,6 @@ pub fn prove(
     })
 }
 
-#[wasm_bindgen(catch)]
 pub fn verify(params: &str, proof: &str, nullifier_hex: &str, root_hex: &str) -> Result<KGVerify, Box<Error>> {
     let de_params = Parameters::read(&hex::decode(params)?[..], true)?;
     let pvk = prepare_verifying_key::<Bn256>(&de_params.vk);
