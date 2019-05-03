@@ -35,6 +35,7 @@ use sapling_crypto::{
 
 use pairing::{bn256::{Fr}};
 
+mod blake_circuit;
 mod merkle_tree;
 mod zk_util;
 
@@ -190,35 +191,35 @@ mod test {
     use merkle_tree::{create_leaf_list, create_leaf_from_preimage, build_merkle_tree_with_proof};
     use time::PreciseTime;
 
-    #[test]
-    fn test_merkle_circuit() {
-        let mut cs = TestConstraintSystem::<Bn256>::new();
-        let seed_slice = &[1u32, 1u32, 1u32, 1u32];
-        let rng = &mut ChaChaRng::from_seed(seed_slice);
-        println!("generating setup...");
-        let start = PreciseTime::now();
+    // #[test]
+    // fn test_merkle_circuit() {
+    //     let mut cs = TestConstraintSystem::<Bn256>::new();
+    //     let seed_slice = &[1u32, 1u32, 1u32, 1u32];
+    //     let rng = &mut ChaChaRng::from_seed(seed_slice);
+    //     println!("generating setup...");
+    //     let start = PreciseTime::now();
         
-        let mut proof_vec = vec![];
-        for _ in 0..32 {
-            proof_vec.push(Some((
-                true,
-                Fr::rand(rng))
-            ));
-        }
+    //     let mut proof_vec = vec![];
+    //     for _ in 0..32 {
+    //         proof_vec.push(Some((
+    //             true,
+    //             Fr::rand(rng))
+    //         ));
+    //     }
 
-        let j_params = &JubjubBn256::new();
-        let m_circuit = MerkleTreeCircuit {
-            params: j_params,
-            nullifier: Some(Fr::rand(rng)),
-            secret: Some(Fr::rand(rng)),
-            proof: proof_vec,
-        };
+    //     let j_params = &JubjubBn256::new();
+    //     let m_circuit = MerkleTreeCircuit {
+    //         params: j_params,
+    //         nullifier: Some(Fr::rand(rng)),
+    //         secret: Some(Fr::rand(rng)),
+    //         proof: proof_vec,
+    //     };
 
-        m_circuit.synthesize(&mut cs).unwrap();
-        println!("setup generated in {} s", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
-        println!("num constraints: {}", cs.num_constraints());
-        println!("num inputs: {}", cs.num_inputs());
-    }
+    //     m_circuit.synthesize(&mut cs).unwrap();
+    //     println!("setup generated in {} s", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
+    //     println!("num constraints: {}", cs.num_constraints());
+    //     println!("num inputs: {}", cs.num_inputs());
+    // }
 
     #[test]
     fn test_generate_params() {

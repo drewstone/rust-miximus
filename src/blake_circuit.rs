@@ -1,17 +1,11 @@
-#![feature(custom_attribute)]
-extern crate sapling_crypto;
-extern crate bellman;
-extern crate pairing;
-extern crate ff;
-extern crate num_bigint;
-extern crate num_traits;
-extern crate rand;
-extern crate time;
-extern crate wasm_bindgen;
+use sapling_crypto::circuit::blake2s::blake2s;
+use rand::{ChaChaRng, SeedableRng, Rng};
+use bellman::groth16::{Proof, Parameters, verify_proof, create_random_proof, prepare_verifying_key, generate_random_parameters};
+use num_bigint::BigInt;
+use num_traits::Num;
+use std::error::Error;
 
-#[macro_use]
-extern crate serde_derive;
-
+use pairing::{bn256::{Fr, Bn256}};
 
 use wasm_bindgen::prelude::*;
 
@@ -25,96 +19,152 @@ use bellman::{
     ConstraintSystem,
 };
 
-use ff::{Field, PrimeField};
+use ff::{PrimeField};
 use sapling_crypto::{
     circuit::{
+        multipack,
         num::{AllocatedNum},
-        blake2s,
-        uint32::Uint32,
-        boolean::{Boolean, AllocatedBit}
+        boolean::{Boolean, AllocatedBit},
     }
 };
 
-mod blake_circuit;
+pub const SUBSTRATE_BLAKE2_PERSONALIZATION: &'static [u8; 8]
+          = b"TFWTFWTF";
 
 /// Circuit for proving knowledge of preimage of leaf in merkle tree
-struct BlakeTreeCircuit<'a, E: JubjubEngine> {
+struct BlakeTreeCircuit {
     // nullifier
-    nullifier: Option<Uint32>,
-    // blake2 personalization
-    personalization: Option<Vec<u8>>,
+    nullifier: Option<[u8; 32]>,
     // secret
-    secret: Option<Uint32>,
+    secret: Option<[u8; 32]>,
     // merkle proof
-    proof: Vec<Option<(bool, Uint32)>>,
+    proof: Vec<Option<(bool, [u8; 32])>>,
 }
 
 /// Our demo circuit implements this `Circuit` trait which
 /// is used during paramgen and proving in order to
 /// synthesize the constraint system.
-impl<'a, E: JubjubEngine> Circuit<E> for BlakeTreeCircuit<'a, E> {
+impl<E: Engine> Circuit<E> for BlakeTreeCircuit {
     fn synthesize<CS: ConstraintSystem<E>>(self, cs: &mut CS) -> Result<(), SynthesisError> {
         // nullifier is the left side of the preimage
-        let nullifier = AllocatedNum::alloc(cs.namespace(|| "nullifier"),
-            || Ok(match self.nullifier {
-                Some(n) => n.into_bits(),
-                None => UInt32::constant(0 as u32).into_bits(),
-            })
-        )?;
-        nullifier.inputize(cs.namespace(|| "public input nullifier"))?;
+        let nullifier: Vec<Boolean> = witness_u256(
+            cs.namespace(|| "nullifier as Vec<Boolean>"),
+            self.nullifier.as_ref().map(|v| &v[..])
+        ).unwrap();
+        multipack::pack_into_inputs(cs.namespace(|| "nullifier pack"), &nullifier)?;
 
-        // personalization is the left side of the preimage
-        let personalization = AllocatedNum::alloc(cs.namespace(|| "personalization"),
-            || Ok(match self.personalization {
-                Some(n) => n.to_bytes(),
-                None => b"12345678",
-            })
-        )?;
-        personalization.inputize(cs.namespace(|| "public input personalization"))?;
+        let nullifier_field_pt: E::Fr = multipack::compute_multipacking::<E>(&booleans_to_bools(nullifier.clone()))[0];
+        let nullifier_alloc: AllocatedNum<E> = AllocatedNum::alloc(cs.namespace(|| "nullifier"), || Ok(nullifier_field_pt))?;
+        nullifier_alloc.inputize(cs.namespace(|| "public input nullifier"))?;
+
         // secret is the right side of the preimage
-        let secret = AllocatedNum::alloc(cs.namespace(|| "secret"),
-            || Ok(match self.secret {
-                Some(s) => s.into_bits(),
-                None => UInt32::constant(0 as u32).into_bits(),
-            })
-        )?;
-        // construct preimage using [nullifier_bits|secret_bits] concatenation
-        let mut preimage = vec![];
-        preimage.extend(nullifier.into_bits());
-        preimage.extend(secret.into_bits());
-        // compute leaf hash using pedersen hash of preimage
-        let mut hash = blake2s(&mut cs, &preimage, personalization).unwrap();
+        let secret: Vec<Boolean> = witness_u256(
+            cs.namespace(|| "secret"),
+            self.secret.as_ref().map(|v| &v[..])
+        ).unwrap();
+        multipack::pack_into_inputs(cs.namespace(|| "secret pack"), &secret)?;
 
+        // construct preimage using [nullifier_bits|secret_bits] concatenation
+        let mut preimage: Vec<Boolean> = vec![];
+
+        preimage.extend(nullifier.into_iter());
+        preimage.resize(256, Boolean::Constant(false));
+
+        preimage.extend(secret.iter().cloned());
+        preimage.resize(512, Boolean::Constant(false));
+        // compute leaf hash using pedersen hash of preimage
+        let mut hash = blake2s(cs.namespace(|| "blake hash 0"), &preimage, SUBSTRATE_BLAKE2_PERSONALIZATION).unwrap();
 
         // reconstruct merkle root hash using the private merkle path
         for i in 0..self.proof.len() {
 			if let Some((ref side, ref element)) = self.proof[i] {
-                let elt = AllocatedNum::alloc(cs.namespace(|| format!("elt {}", i)), || Ok(*element))?;
-                let right_side = Boolean::from(AllocatedBit::alloc(
-                    cs.namespace(|| format!("position bit {}", i)),
-                    Some(*side)).unwrap()
-                );
+                let elt = witness_u256(
+                    cs.namespace(|| format!("elt {}", i)),
+                    Some(element.as_ref())
+                ).unwrap();
+
                 // Swap the two if the current subtree is on the right
-                let (xl, xr) = AllocatedNum::conditionally_reverse(
-                    cs.namespace(|| format!("conditional reversal of preimage {}", i)),
-                    &elt,
-                    &hash,
-                    &right_side
-                )?;
+                let (xl, xr): (Vec<Boolean>, Vec<Boolean>);
+                if *side {
+                    xl = elt;
+                    xr = hash;
+                } else {
+                    xl = hash;
+                    xr = elt;
+                }
+
                 // build preimage of merkle hash as concatenation of left and right nodes
                 let mut preimage = vec![];
-                preimage.extend(xl.into_bits());
-                preimage.extend(xr.into_bits());
-                // Compute the new subtree value
-                let personalization = baby_pedersen_hash::Personalization::MerkleTree(i as usize);
-                hash = blake2s(&mut cs, &preimage, personalization);
+                preimage.extend(xl.into_iter());
+                preimage.resize(256, Boolean::Constant(false));
+
+                preimage.extend(xr.iter().cloned());
+                preimage.resize(512, Boolean::Constant(false));
+
+
+                hash = blake2s(cs.namespace(|| format!("black hash depth: {}", i)), &preimage, SUBSTRATE_BLAKE2_PERSONALIZATION).unwrap();
             }
         }
 
-        hash.inputize(cs)?;
-        println!("THE ROOT HASH {:?}", hash.get_value());
+        assert_eq!(hash.len(), 256);
+        let hash_pt: E::Fr = multipack::compute_multipacking::<E>(&booleans_to_bools(hash))[0];
+        let hash_alloc: AllocatedNum<E> = AllocatedNum::alloc(cs.namespace(|| "hash alloc"), || Ok(hash_pt))?;
+        hash_alloc.inputize(cs.namespace(|| "calculated root hash"))?;
         Ok(())
     }
+}
+
+fn booleans_to_bools(booleans: Vec<Boolean>) -> Vec<bool> {
+    let mut bools: Vec<bool> = vec![];
+    for i in 0..booleans.len() {
+        bools.push(booleans[i].get_value().unwrap());
+    }
+    bools
+}
+
+/// Witnesses some bytes in the constraint system,
+/// skipping the first `skip_bits`.
+fn witness_bits<E, CS>(
+    mut cs: CS,
+    value: Option<&[u8]>,
+    num_bits: usize,
+    skip_bits: usize
+) -> Result<Vec<Boolean>, SynthesisError>
+    where E: Engine, CS: ConstraintSystem<E>,
+{
+    let bit_values = if let Some(value) = value {
+        let mut tmp = vec![];
+        for b in value.iter()
+                      .flat_map(|&m| (0..8).rev().map(move |i| m >> i & 1 == 1))
+                      .skip(skip_bits)
+        {
+            tmp.push(Some(b));
+        }
+        tmp
+    } else {
+        vec![None; num_bits]
+    };
+    assert_eq!(bit_values.len(), num_bits);
+
+    let mut bits = vec![];
+
+    for (i, value) in bit_values.into_iter().enumerate() {
+        bits.push(Boolean::from(AllocatedBit::alloc(
+            cs.namespace(|| format!("bit {}", i)),
+            value
+        )?));
+    }
+
+    Ok(bits)
+}
+
+fn witness_u256<E, CS>(
+    cs: CS,
+    value: Option<&[u8]>,
+) -> Result<Vec<Boolean>, SynthesisError>
+    where E: Engine, CS: ConstraintSystem<E>,
+{
+    witness_bits(cs, value, 256, 0)
 }
 
 #[derive(Serialize)]
@@ -134,19 +184,16 @@ pub struct KGVerify {
 
 pub fn generate(seed_slice: &[u32], depth: u32) -> Result<KGGenerate, Box<Error>> {
     let rng = &mut ChaChaRng::from_seed(seed_slice);
-    let params = &Engine::new();
     let mut proof_elts = vec![];
 
     for _ in 0..depth {
         proof_elts.push(Some((
             true,
-            UInt32::constant(0 as u32),
+            rng.gen::<[u8; 32]>(),
         )));
     }
     let params = generate_random_parameters::<Bn256, _, _>(
         BlakeTreeCircuit {
-            params: j_params,
-            personalization: None,
             nullifier: None,
             secret: None,
             proof: proof_elts,
@@ -166,46 +213,35 @@ pub fn generate(seed_slice: &[u32], depth: u32) -> Result<KGGenerate, Box<Error>
 pub fn prove(
     seed_slice: &[u32],
     params: &str,
-    nullifier: &u32,
-    secret: &u32,
-    mut proof_path: &[u32],
-    mut proof_path_sides: &[u8]
+    nullifier: &[u8; 32],
+    secret: &[u8; 32],
+    root_hash: &[u8; 32],
+    mut proof_path: Vec<[u8; 32]>,
+    mut proof_path_sides: &str,
 ) -> Result<KGProof, Box<Error>> {
-    let de_params = Parameters::<Bn256>::read(&hex::decode(params)?[..], true)?;
     let rng = &mut ChaChaRng::from_seed(seed_slice);
-    // Nullifier
-    let nullifier_big = BigInt::from_str_radix(nullifier_hex, 16)?;
-    let nullifier_raw = &nullifier_big.to_str_radix(10);
-    let nullifier = Fr::from_str(nullifier_raw).ok_or("couldn't parse Fr")?;
-    // Secret preimage data
-    let secret_big = BigInt::from_str_radix(secret_hex, 16)?;
-    let secret_raw = &secret_big.to_str_radix(10);
-    let secret = Fr::from_str(secret_raw).ok_or("couldn't parse Fr")?;
-    // Proof path
-    let mut proof_p_big: Vec<Option<(bool, pairing::bn256::Fr)>> = vec![];
+    // construct proof path structure
+    let de_params = Parameters::<Bn256>::read(&hex::decode(params)?[..], true)?;
+    let mut proof_p_big: Vec<Option<(bool, [u8; 32])>> = vec![];
     let proof_len = proof_path_sides.len();
     for _ in 0..proof_len {
-        let (neighbor_i, pfh) = proof_path_hex.split_at(64);
+        let neighbor_i = proof_path.remove(0);
         let (side_i, pfs) = proof_path_sides.split_at(1);
-        proof_path_hex = pfh;
+
         proof_path_sides = pfs;
         let mut side_bool = false;
         if side_i == "1" { side_bool = true }
 
-        let p_big = BigInt::from_str_radix(neighbor_i, 16)?;
-        let p_raw = &p_big.to_str_radix(10);
-        let p = Fr::from_str(p_raw).ok_or("couldn't parse Fr")?;
         proof_p_big.push(Some((
             side_bool,
-            p,
+            neighbor_i,
         )));
     }
 
     let proof = create_random_proof(
-        MerkleTreeCircuit {
-            params: j_params,
-            nullifier: Some(nullifier),
-            secret: Some(secret),
+        BlakeTreeCircuit {
+            nullifier: Some(*nullifier),
+            secret: Some(*secret),
             proof: proof_p_big,
         },
         &de_params,
@@ -219,7 +255,12 @@ pub fn prove(
     })
 }
 
-pub fn verify(params: &str, proof: &str, nullifier_hex: &str, root_hex: &str) -> Result<KGVerify, Box<Error>> {
+pub fn verify(
+    params: &str,
+    proof: &str,
+    nullifier_hex: &str,
+    root_hex: &str
+) -> Result<KGVerify, Box<Error>> {
     let de_params = Parameters::read(&hex::decode(params)?[..], true)?;
     let pvk = prepare_verifying_key::<Bn256>(&de_params.vk);
     // Nullifier
@@ -262,12 +303,13 @@ pub fn generate_tree(seed_slice: &[u32], depth: u32) -> Result<JsValue, JsValue>
 pub fn prove_tree(
     seed_slice: &[u32],
     params: &str,
-    nullifier: &u32,
-    secret: &u32,
-    proof_path: &[u32],
-    proof_path_sides: &[u8]
+    nullifier: &[u8; 32],
+    secret: &[u8; 32],
+    root_hash: &[u8; 32],
+    proof_path: Vec<[u8; 32]>,
+    proof_path_sides: &str,
 ) -> Result<JsValue, JsValue> {
-    let res = prove(seed_slice, params, nullifier_hex, secret_hex, proof_path_hex, proof_path_sides);
+    let res = prove(seed_slice, params, nullifier, secret, root_hash, proof_path, proof_path_sides);
     if res.is_ok() {
         Ok(JsValue::from_serde(&res.ok().unwrap()).unwrap())
     } else {
@@ -278,11 +320,11 @@ pub fn prove_tree(
 #[wasm_bindgen(catch)]
 pub fn verify_tree(
     params: &str,
-    proof: &[u32],
-    nullifier: &u32,
-    root: &u32
+    proof: &str,
+    nullifier: &str,
+    root: &str,
 ) -> Result<JsValue, JsValue> {
-    let res = verify(params, proof, nullifier_hex, root_hex);
+    let res = verify(params, proof, nullifier, root);
     if res.is_ok() {
         Ok(JsValue::from_serde(&res.ok().unwrap()).unwrap())
     } else {
@@ -292,8 +334,8 @@ pub fn verify_tree(
 
 #[cfg(test)]
 mod test {
-    use std::fs;
-    use pairing::{bn256::{Bn256, Fr}};
+    use rand::Rng;
+    use pairing::{bn256::{Bn256}};
     use sapling_crypto::{
         babyjubjub::{
             JubjubBn256,
@@ -307,10 +349,10 @@ mod test {
     use bellman::{
         Circuit,
     };
-    use rand::Rand;
+    
 
-    use super::{BlakeTreeCircuit, generate, prove, verify};
-    use merkle_tree::{create_leaf_list, create_leaf_from_preimage, build_merkle_tree_with_proof};
+    use super::{BlakeTreeCircuit};
+    
     use time::PreciseTime;
 
     #[test]
@@ -321,20 +363,21 @@ mod test {
         println!("generating setup...");
         let start = PreciseTime::now();
         
-        let mut proof_vec = vec![];
-        for _ in 0..32 {
-            proof_vec.push(Some((
+        let depth = 3;
+
+        let mut proof_elts = vec![];
+        for _ in 0..depth {
+            proof_elts.push(Some((
                 true,
-                Fr::rand(rng))
-            ));
+                rng.gen::<[u8; 32]>(),
+            )));
         }
 
-        let j_params = &JubjubBn256::new();
+        let _j_params = &JubjubBn256::new();
         let m_circuit = BlakeTreeCircuit {
-            params: j_params,
-            nullifier: Some(Fr::rand(rng)),
-            secret: Some(Fr::rand(rng)),
-            proof: proof_vec,
+            nullifier: Some(rng.gen::<[u8; 32]>()),
+            secret: Some(rng.gen::<[u8; 32]>()),
+            proof: proof_elts,
         };
 
         m_circuit.synthesize(&mut cs).unwrap();
