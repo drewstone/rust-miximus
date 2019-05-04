@@ -8,6 +8,7 @@ extern crate num_traits;
 extern crate rand;
 extern crate time;
 extern crate wasm_bindgen;
+extern crate blake2_rfc;
 
 #[macro_use]
 extern crate serde_derive;
@@ -36,6 +37,7 @@ use sapling_crypto::{
 use pairing::{bn256::{Fr}};
 
 mod blake_circuit;
+mod blake_merkle_tree;
 mod merkle_tree;
 mod zk_util;
 

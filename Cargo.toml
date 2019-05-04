@@ -10,6 +10,7 @@ crate-type = ["cdylib"]
 sapling-crypto = { path = "./sapling-crypto" }
 pairing = { path = "./pairing" }
 ff = { path = "./ff" }
+blake2-rfc = "0.2.18"
 bellman = { path = "./bellman" }
 rand = "0.4"
 hex = "0.3.2"

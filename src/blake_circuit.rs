@@ -352,7 +352,6 @@ mod test {
     
 
     use super::{BlakeTreeCircuit};
-    
     use time::PreciseTime;
 
     #[test]
@@ -384,5 +383,10 @@ mod test {
         println!("setup generated in {} s", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
         println!("num constraints: {}", cs.num_constraints());
         println!("num inputs: {}", cs.num_inputs());
+    }
+
+    #[test]
+    fn test_all_components() {
+        
     }
 }
