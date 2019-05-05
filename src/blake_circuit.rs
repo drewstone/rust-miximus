@@ -32,13 +32,13 @@ pub const SUBSTRATE_BLAKE2_PERSONALIZATION: &'static [u8; 8]
           = b"TFWTFWTF";
 
 /// Circuit for proving knowledge of preimage of leaf in merkle tree
-struct BlakeTreeCircuit {
+pub struct BlakeTreeCircuit {
     // nullifier
-    nullifier: Option<[u8; 32]>,
+    pub nullifier: Option<[u8; 32]>,
     // secret
-    secret: Option<[u8; 32]>,
+    pub secret: Option<[u8; 32]>,
     // merkle proof
-    proof: Vec<Option<(bool, [u8; 32])>>,
+    pub proof: Vec<Option<(bool, [u8; 32])>>,
 }
 
 /// Our demo circuit implements this `Circuit` trait which
@@ -72,9 +72,10 @@ impl<E: Engine> Circuit<E> for BlakeTreeCircuit {
 
         preimage.extend(secret.iter().cloned());
         preimage.resize(512, Boolean::Constant(false));
+        println!("{:?}", preimage.len());
         // compute leaf hash using pedersen hash of preimage
         let mut hash = blake2s(cs.namespace(|| "blake hash 0"), &preimage, SUBSTRATE_BLAKE2_PERSONALIZATION).unwrap();
-
+        println!("{:?}", hash.len());
         // reconstruct merkle root hash using the private merkle path
         for i in 0..self.proof.len() {
 			if let Some((ref side, ref element)) = self.proof[i] {
@@ -192,15 +193,16 @@ pub fn generate(seed_slice: &[u32], depth: u32) -> Result<KGGenerate, Box<Error>
             rng.gen::<[u8; 32]>(),
         )));
     }
+
     let params = generate_random_parameters::<Bn256, _, _>(
         BlakeTreeCircuit {
-            nullifier: None,
-            secret: None,
+            nullifier: Some(rng.gen::<[u8; 32]>()),
+            secret: Some(rng.gen::<[u8; 32]>()),
             proof: proof_elts,
         },
         rng,
     )?;
-
+    println!("there");
     let mut v = vec![];
 
     params.write(&mut v)?;
@@ -215,39 +217,22 @@ pub fn prove(
     params: &str,
     nullifier: &[u8; 32],
     secret: &[u8; 32],
-    root_hash: &[u8; 32],
-    mut proof_path: Vec<[u8; 32]>,
-    mut proof_path_sides: &str,
+    proof_path: Vec<Option<(bool,[u8; 32])>>,
 ) -> Result<KGProof, Box<Error>> {
     let rng = &mut ChaChaRng::from_seed(seed_slice);
     // construct proof path structure
     let de_params = Parameters::<Bn256>::read(&hex::decode(params)?[..], true)?;
-    let mut proof_p_big: Vec<Option<(bool, [u8; 32])>> = vec![];
-    let proof_len = proof_path_sides.len();
-    for _ in 0..proof_len {
-        let neighbor_i = proof_path.remove(0);
-        let (side_i, pfs) = proof_path_sides.split_at(1);
-
-        proof_path_sides = pfs;
-        let mut side_bool = false;
-        if side_i == "1" { side_bool = true }
-
-        proof_p_big.push(Some((
-            side_bool,
-            neighbor_i,
-        )));
-    }
 
     let proof = create_random_proof(
         BlakeTreeCircuit {
             nullifier: Some(*nullifier),
             secret: Some(*secret),
-            proof: proof_p_big,
+            proof: proof_path,
         },
         &de_params,
         rng
     ).unwrap();
-    println!("hello");
+
     let mut v = vec![];
     proof.write(&mut v)?;
     Ok(KGProof {
@@ -305,11 +290,10 @@ pub fn prove_tree(
     params: &str,
     nullifier: &[u8; 32],
     secret: &[u8; 32],
-    root_hash: &[u8; 32],
-    proof_path: Vec<[u8; 32]>,
+    proof_path: Vec<Option<(bool,[u8; 32])>>,
     proof_path_sides: &str,
 ) -> Result<JsValue, JsValue> {
-    let res = prove(seed_slice, params, nullifier, secret, root_hash, proof_path, proof_path_sides);
+    let res = prove(seed_slice, params, nullifier, secret, proof_path);
     if res.is_ok() {
         Ok(JsValue::from_serde(&res.ok().unwrap()).unwrap())
     } else {
@@ -329,64 +313,5 @@ pub fn verify_tree(
         Ok(JsValue::from_serde(&res.ok().unwrap()).unwrap())
     } else {
         Err(JsValue::from_str(&res.err().unwrap().to_string()))
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use rand::Rng;
-    use pairing::{bn256::{Bn256}};
-    use sapling_crypto::{
-        babyjubjub::{
-            JubjubBn256,
-        }
-    };
-    use rand::{ChaChaRng, SeedableRng};
-
-    use sapling_crypto::circuit::{
-        test::TestConstraintSystem
-    };
-    use bellman::{
-        Circuit,
-    };
-    
-
-    use super::{BlakeTreeCircuit};
-    use time::PreciseTime;
-
-    #[test]
-    fn test_merkle_circuit() {
-        let mut cs = TestConstraintSystem::<Bn256>::new();
-        let seed_slice = &[1u32, 1u32, 1u32, 1u32];
-        let rng = &mut ChaChaRng::from_seed(seed_slice);
-        println!("generating setup...");
-        let start = PreciseTime::now();
-        
-        let depth = 3;
-
-        let mut proof_elts = vec![];
-        for _ in 0..depth {
-            proof_elts.push(Some((
-                true,
-                rng.gen::<[u8; 32]>(),
-            )));
-        }
-
-        let _j_params = &JubjubBn256::new();
-        let m_circuit = BlakeTreeCircuit {
-            nullifier: Some(rng.gen::<[u8; 32]>()),
-            secret: Some(rng.gen::<[u8; 32]>()),
-            proof: proof_elts,
-        };
-
-        m_circuit.synthesize(&mut cs).unwrap();
-        println!("setup generated in {} s", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
-        println!("num constraints: {}", cs.num_constraints());
-        println!("num inputs: {}", cs.num_inputs());
-    }
-
-    #[test]
-    fn test_all_components() {
-        
     }
 }

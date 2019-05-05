@@ -266,7 +266,6 @@ pub fn blake2s<E: Engine, CS: ConstraintSystem<E>>(
 ) -> Result<Vec<Boolean>, SynthesisError>
 {
     use byteorder::{ByteOrder, LittleEndian};
-
     assert_eq!(personalization.len(), 8);
     assert!(input.len() % 8 == 0);
 

@@ -13,6 +13,7 @@ extern crate blake2_rfc;
 #[macro_use]
 extern crate serde_derive;
 
+extern crate hex;
 
 use wasm_bindgen::prelude::*;
 
@@ -188,40 +189,42 @@ mod test {
         Circuit,
     };
     use rand::Rand;
+    use rand::Rng;
 
     use super::{MerkleTreeCircuit, generate, prove, verify};
+    use blake_circuit::BlakeTreeCircuit;
     use merkle_tree::{create_leaf_list, create_leaf_from_preimage, build_merkle_tree_with_proof};
     use time::PreciseTime;
 
-    // #[test]
-    // fn test_merkle_circuit() {
-    //     let mut cs = TestConstraintSystem::<Bn256>::new();
-    //     let seed_slice = &[1u32, 1u32, 1u32, 1u32];
-    //     let rng = &mut ChaChaRng::from_seed(seed_slice);
-    //     println!("generating setup...");
-    //     let start = PreciseTime::now();
+    #[test]
+    fn test_merkle_circuit() {
+        let mut cs = TestConstraintSystem::<Bn256>::new();
+        let seed_slice = &[1u32, 1u32, 1u32, 1u32];
+        let rng = &mut ChaChaRng::from_seed(seed_slice);
+        println!("generating setup...");
+        let start = PreciseTime::now();
         
-    //     let mut proof_vec = vec![];
-    //     for _ in 0..32 {
-    //         proof_vec.push(Some((
-    //             true,
-    //             Fr::rand(rng))
-    //         ));
-    //     }
+        let mut proof_vec = vec![];
+        for _ in 0..32 {
+            proof_vec.push(Some((
+                true,
+                Fr::rand(rng))
+            ));
+        }
 
-    //     let j_params = &JubjubBn256::new();
-    //     let m_circuit = MerkleTreeCircuit {
-    //         params: j_params,
-    //         nullifier: Some(Fr::rand(rng)),
-    //         secret: Some(Fr::rand(rng)),
-    //         proof: proof_vec,
-    //     };
+        let j_params = &JubjubBn256::new();
+        let m_circuit = MerkleTreeCircuit {
+            params: j_params,
+            nullifier: Some(Fr::rand(rng)),
+            secret: Some(Fr::rand(rng)),
+            proof: proof_vec,
+        };
 
-    //     m_circuit.synthesize(&mut cs).unwrap();
-    //     println!("setup generated in {} s", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
-    //     println!("num constraints: {}", cs.num_constraints());
-    //     println!("num inputs: {}", cs.num_inputs());
-    // }
+        m_circuit.synthesize(&mut cs).unwrap();
+        println!("setup generated in {} s", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
+        println!("num constraints: {}", cs.num_constraints());
+        println!("num inputs: {}", cs.num_inputs());
+    }
 
     #[test]
     fn test_generate_params() {
@@ -333,5 +336,80 @@ mod test {
         println!("\ncomputed root generated in {} s\n\n", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
         println!("\nComputed root{:?}\n", _computed_root);
         assert!(_computed_root == *_r.root.hash());
+    }
+
+    #[test]
+    fn test_blake_merkle_circuit() {
+        let mut cs = TestConstraintSystem::<Bn256>::new();
+        let seed_slice = &[1u32, 1u32, 1u32, 1u32];
+        let rng = &mut ChaChaRng::from_seed(seed_slice);
+        println!("generating setup...");
+        let start = PreciseTime::now();
+        
+        let depth = 3;
+
+        let mut proof_elts = vec![];
+        for _ in 0..depth {
+            proof_elts.push(Some((
+                true,
+                rng.gen::<[u8; 32]>(),
+            )));
+        }
+
+        let _j_params = &JubjubBn256::new();
+
+        let nullifier = rng.gen::<[u8; 32]>();
+        let secret = rng.gen::<[u8; 32]>();
+        let m_circuit = BlakeTreeCircuit {
+            nullifier: Some(nullifier),
+            secret: Some(secret),
+            proof: proof_elts,
+        };
+
+        m_circuit.synthesize(&mut cs).unwrap();
+        println!("setup generated in {} s", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
+        println!("num constraints: {}", cs.num_constraints());
+        println!("num inputs: {}", cs.num_inputs());
+    }
+
+    #[test]
+    fn test_bmt_sequence() {
+        use blake_merkle_tree;
+        use blake_circuit;
+
+        let mut _cs = TestConstraintSystem::<Bn256>::new();
+        let seed_slice = &[1u32, 1u32, 1u32, 1u32];
+        let rng = &mut ChaChaRng::from_seed(seed_slice);
+
+        let nullifier = rng.gen::<[u8; 32]>();
+        let secret = rng.gen::<[u8; 32]>();
+        println!("Nullifier: {:?}", nullifier);
+        println!("Secret: {:?}", secret);
+        let leaf = blake_merkle_tree::create_leaf_from_preimage(nullifier, secret);
+        println!("Leaf hash: {:?}\n", leaf.hash());
+
+        let bmt_leaves = blake_merkle_tree::create_leaf_list(vec![*leaf.hash()], 3);
+        let (_r, proof_path) = blake_merkle_tree::build_merkle_tree_with_proof(bmt_leaves, 3, 3, *leaf.hash(), vec![]);
+        println!("Path {:?}", proof_path);
+        println!("Root hash: {:?}\n", _r.root.hash());
+
+        let params = blake_circuit::generate(seed_slice, proof_path.len() as u32).unwrap().params;
+        println!("Circuit params{:?}", params);
+        let proof_hex = blake_circuit::prove(
+            seed_slice,
+            &params,
+            &nullifier,
+            &secret,
+            proof_path,
+        ).unwrap();
+
+        fs::write("test/test.params", params).unwrap();
+        fs::write("test/test.proof", proof_hex.proof).unwrap();
+        let parameters = &String::from_utf8(fs::read("test/test.params").unwrap()).unwrap();
+        let the_proof = &String::from_utf8(fs::read("test/test.proof").unwrap()).unwrap();
+        
+        // let h = &String::from_utf8(fs::read("test/test_tree.h").unwrap()).unwrap();
+        let verify = verify(parameters, the_proof, &hex::encode(nullifier), &hex::encode(_r.root.hash())).unwrap();
+        println!("Did the circuit work!? {:?}", verify.result);
     }
 }
