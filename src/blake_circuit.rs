@@ -72,10 +72,13 @@ impl<E: Engine> Circuit<E> for BlakeTreeCircuit {
 
         preimage.extend(secret.iter().cloned());
         preimage.resize(512, Boolean::Constant(false));
-        println!("{:?}", preimage.len());
         // compute leaf hash using pedersen hash of preimage
-        let mut hash = blake2s(cs.namespace(|| "blake hash 0"), &preimage, SUBSTRATE_BLAKE2_PERSONALIZATION).unwrap();
-        println!("{:?}", hash.len());
+        let mut hash = match blake2s(cs.namespace(|| "preimage hash"), &preimage, SUBSTRATE_BLAKE2_PERSONALIZATION) {
+            Ok(value) => value,
+            Err(e) => panic!("{:?}", e),
+        };
+
+        print_booleans(hash.clone());
         // reconstruct merkle root hash using the private merkle path
         for i in 0..self.proof.len() {
 			if let Some((ref side, ref element)) = self.proof[i] {
@@ -86,7 +89,7 @@ impl<E: Engine> Circuit<E> for BlakeTreeCircuit {
 
                 // Swap the two if the current subtree is on the right
                 let (xl, xr): (Vec<Boolean>, Vec<Boolean>);
-                if *side {
+                if !*side {
                     xl = elt;
                     xr = hash;
                 } else {
@@ -108,19 +111,23 @@ impl<E: Engine> Circuit<E> for BlakeTreeCircuit {
         }
 
         assert_eq!(hash.len(), 256);
-        let hash_pt: E::Fr = multipack::compute_multipacking::<E>(&booleans_to_bools(hash))[0];
-        let hash_alloc: AllocatedNum<E> = AllocatedNum::alloc(cs.namespace(|| "hash alloc"), || Ok(hash_pt))?;
-        hash_alloc.inputize(cs.namespace(|| "calculated root hash"))?;
+        // let hash_pt_arr = multipack::compute_multipacking::<E>(&booleans_to_bools(hash));
+        // let hash_alloc: AllocatedNum<E> = AllocatedNum::alloc(cs.namespace(|| "hash alloc"), || Ok(hash_pt))?;
+        // hash_alloc.inputize(cs.namespace(|| "calculated root hash"))?;
         Ok(())
     }
 }
 
 fn booleans_to_bools(booleans: Vec<Boolean>) -> Vec<bool> {
-    let mut bools: Vec<bool> = vec![];
+    return booleans.clone().iter_mut().map(|b| {
+        b.get_value().unwrap()
+    }).collect();
+}
+
+fn print_booleans(booleans: Vec<Boolean>) {
     for i in 0..booleans.len() {
-        bools.push(booleans[i].get_value().unwrap());
+        println!("{:?}", booleans[i].get_value());
     }
-    bools
 }
 
 /// Witnesses some bytes in the constraint system,
@@ -194,15 +201,20 @@ pub fn generate(seed_slice: &[u32], depth: u32) -> Result<KGGenerate, Box<Error>
         )));
     }
 
-    let params = generate_random_parameters::<Bn256, _, _>(
+    let result = generate_random_parameters::<Bn256, _, _>(
         BlakeTreeCircuit {
             nullifier: Some(rng.gen::<[u8; 32]>()),
             secret: Some(rng.gen::<[u8; 32]>()),
             proof: proof_elts,
         },
         rng,
-    )?;
-    println!("there");
+    );
+
+    let params = match result {
+        Ok(p) => p,
+        Err(m) => panic!(m),
+    };
+
     let mut v = vec![];
 
     params.write(&mut v)?;
@@ -291,7 +303,6 @@ pub fn prove_tree(
     nullifier: &[u8; 32],
     secret: &[u8; 32],
     proof_path: Vec<Option<(bool,[u8; 32])>>,
-    proof_path_sides: &str,
 ) -> Result<JsValue, JsValue> {
     let res = prove(seed_slice, params, nullifier, secret, proof_path);
     if res.is_ok() {
