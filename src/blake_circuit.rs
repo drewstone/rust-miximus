@@ -29,7 +29,7 @@ use sapling_crypto::{
 };
 
 pub const SUBSTRATE_BLAKE2_PERSONALIZATION: &'static [u8; 8]
-          = b"TFWTFWTF";
+          = b"12345678";
 
 /// Circuit for proving knowledge of preimage of leaf in merkle tree
 pub struct BlakeTreeCircuit {
@@ -70,15 +70,15 @@ impl<E: Engine> Circuit<E> for BlakeTreeCircuit {
         preimage.extend(nullifier.into_iter());
         preimage.resize(256, Boolean::Constant(false));
 
-        preimage.extend(secret.iter().cloned());
+        preimage.extend(secret.into_iter());
         preimage.resize(512, Boolean::Constant(false));
+
         // compute leaf hash using pedersen hash of preimage
         let mut hash = match blake2s(cs.namespace(|| "preimage hash"), &preimage, SUBSTRATE_BLAKE2_PERSONALIZATION) {
             Ok(value) => value,
             Err(e) => panic!("{:?}", e),
         };
 
-        print_booleans(hash.clone());
         // reconstruct merkle root hash using the private merkle path
         for i in 0..self.proof.len() {
 			if let Some((ref side, ref element)) = self.proof[i] {
@@ -111,9 +111,9 @@ impl<E: Engine> Circuit<E> for BlakeTreeCircuit {
         }
 
         assert_eq!(hash.len(), 256);
-        // let hash_pt_arr = multipack::compute_multipacking::<E>(&booleans_to_bools(hash));
-        // let hash_alloc: AllocatedNum<E> = AllocatedNum::alloc(cs.namespace(|| "hash alloc"), || Ok(hash_pt))?;
-        // hash_alloc.inputize(cs.namespace(|| "calculated root hash"))?;
+        let hash_pt = multipack::compute_multipacking::<E>(&booleans_to_bools(hash))[0];
+        let hash_alloc: AllocatedNum<E> = AllocatedNum::alloc(cs.namespace(|| "hash alloc"), || Ok(hash_pt))?;
+        hash_alloc.inputize(cs.namespace(|| "calculated root hash"))?;
         Ok(())
     }
 }

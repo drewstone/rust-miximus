@@ -366,10 +366,22 @@ mod test {
             proof: proof_elts,
         };
 
-        m_circuit.synthesize(&mut cs).unwrap();
+        m_circuit.synthesize(&mut cs).expect("circuit must synthesize");
         println!("setup generated in {} s", start.to(PreciseTime::now()).num_milliseconds() as f64 / 1000.0);
         println!("num constraints: {}", cs.num_constraints());
         println!("num inputs: {}", cs.num_inputs());
+
+        // we can use internal tools to check for some variables being unconstrained (e.g. declared, but not used)
+        let unconstrained = cs.find_unconstrained();
+        println!("{}", unconstrained);
+        assert!(unconstrained == "");
+
+        // let's check that our constraints are satisfied with a current assignment
+        let unsatisfied = cs.which_is_unsatisfied();
+        if unsatisfied.is_some() {
+            panic!("{}", unsatisfied.unwrap());
+        }
+        println!("Constraint system is satisfied");
     }
 
     #[test]
